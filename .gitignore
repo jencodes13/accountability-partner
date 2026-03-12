@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.next/
+out/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/service-account.json
+
+# Build output
+dist/
+.vercel/
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Misc
+*.zip
+*.log
+.superpowers/
