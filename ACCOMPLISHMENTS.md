@@ -1,5 +1,61 @@
 # Accomplishments
 
+## March 14, 2026
+
+### Complete Backend Build
+- Built out all backend capabilities: voice onboarding WebSocket with Gemini Live, check-in sessions with `save_checkin_summary` tool calling, transcript persistence for all sessions
+- Messages API: text + photo endpoints with Gemini Flash for AI responses and vision analysis, GCS photo upload, keyword-based habit matching
+- Registered messages router in `main.py`, added Firestore CRUD for messages collection
+
+**Files modified:** `backend/main.py`, `backend/routers/onboarding.py`, `backend/routers/sessions.py`, `backend/services/firestore_service.py`
+**Files added:** `backend/routers/messages.py`
+
+### iMessage-Style Messaging Page
+- New chat UI accessible from home page nav (MessageCircle icon)
+- User bubbles (sage-tinted, right-aligned) and assistant bubbles (dark card, left-aligned)
+- Photo upload with file picker, typing indicator, auto-scroll, auth guards with onboarding redirect
+- Error toast for invalid file types/sizes
+
+**Files added:** `app/messages/page.tsx`
+**Files modified:** `app/page.tsx`, `lib/db.ts`
+
+### Aurora Voice UI on Check-in Page
+- Replaced WaveformBars with 4-layer Aurora orb (same as onboarding)
+- Audio-reactive morphing via RMS detection on both mic input and agent playback
+- Ref-based DOM updates at 60fps (no React re-renders)
+- Transcript accumulation: agent message history, in-progress text with blinking cursor, last user text display
+- Auto-reset speaker state after agent audio finishes
+
+**Files modified:** `app/check-in/page.tsx`
+
+### Conversation Edge Case Prompts
+- Added CONVERSATION_EDGE_CASES section to check-in system prompt: interruptions, off-topic redirect, app questions, emotional moments, silence handling, repeated questions
+- Added CONVERSATION FLOW section to onboarding prompt
+- Onboarding: pacing instructions to prevent premature tool calls, proper agent intro before questions
+
+**Files modified:** `backend/agent/prompt_builder.py`, `backend/routers/onboarding.py`
+
+### Critical Bug Fixes
+- AudioContext sample rate mismatch: separated mic capture (16kHz) and playback (system default) into two contexts
+- Stale `ws.onclose` closure: used ref instead of captured state value
+- Auth guards: onboarding redirect added to check-in and messages pages
+- Transcript concatenation: added missing space between same-role chunks
+- Chunked base64 encoding: replaced spread operator on large typed arrays to avoid call stack overflow
+- Removed dead code: unused capturePhoto, videoRef, canvasRef, non-functional More button
+
+**Files modified:** `app/check-in/page.tsx`, `app/messages/page.tsx`
+
+### Dev Experience
+- `npm run dev` now starts both frontend (port 3000) and backend (port 8000) via `concurrently`
+- Next.js API rewrites proxy REST calls to backend transparently
+- Pinned frontend to port 3000 to prevent drift
+
+**Files modified:** `package.json`, `next.config.ts`
+
+**Commit:** `545857e9`
+
+---
+
 ## March 12, 2026
 
 ### Project Cleanup & Firebase Migration
