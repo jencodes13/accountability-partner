@@ -135,6 +135,28 @@ def save_checkin_session(user_id: str, session: dict) -> str:
         "microCommitment": session.get("microCommitment", ""),
         "patternsFlagged": session.get("patternsFlagged", []),
         "streakUpdates": session.get("streakUpdates", {}),
+        "transcript": session.get("transcript", []),
+        "timestamp": datetime.now(timezone.utc),
+    })
+    return ref.id
+
+
+def save_session_transcript(user_id: str, session_id: str, transcript: list[dict]):
+    """Append or update the transcript on an existing session document."""
+    db = get_db()
+    ref = db.collection("users").document(user_id).collection("sessions").document(session_id)
+    ref.update({"transcript": transcript})
+
+
+def save_onboarding_session(user_id: str, transcript: list[dict]) -> str:
+    """Save an onboarding voice session with its full transcript."""
+    db = get_db()
+    ref = db.collection("users").document(user_id).collection("sessions").document()
+    ref.set({
+        "id": ref.id,
+        "type": "onboarding",
+        "summary": "Voice onboarding session",
+        "transcript": transcript,
         "timestamp": datetime.now(timezone.utc),
     })
     return ref.id
@@ -154,6 +176,39 @@ def get_checkin_sessions(user_id: str, limit_count: int = 10) -> list[dict]:
 def get_last_checkin_session(user_id: str) -> Optional[dict]:
     sessions = get_checkin_sessions(user_id, limit_count=1)
     return sessions[0] if sessions else None
+
+
+# ─── Chat Messages ───
+
+def save_message(user_id: str, message: dict) -> str:
+    """Save a chat message to Firestore."""
+    db = get_db()
+    ref = db.collection("users").document(user_id).collection("messages").document()
+    ref.set({
+        "id": ref.id,
+        "role": message["role"],
+        "text": message.get("text", ""),
+        "imageUrl": message.get("imageUrl"),
+        "imageDescription": message.get("imageDescription"),
+        "habitId": message.get("habitId"),
+        "timestamp": datetime.now(timezone.utc),
+    })
+    return ref.id
+
+
+def get_messages(user_id: str, limit: int = 50) -> list[dict]:
+    """Get recent chat messages ordered by timestamp ascending (oldest first)."""
+    db = get_db()
+    query = (
+        db.collection("users").document(user_id).collection("messages")
+        .order_by("timestamp", direction="DESCENDING")
+        .limit(limit)
+    )
+    docs = query.get()
+    messages = [doc.to_dict() for doc in docs]
+    # Reverse so oldest first (for chat display)
+    messages.reverse()
+    return messages
 
 
 # ─── Pattern Detection ───

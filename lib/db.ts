@@ -143,6 +143,16 @@ export interface CheckInSession {
   microCommitment?: string;
 }
 
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  imageUrl?: string;
+  imageDescription?: string;
+  habitId?: string;
+  timestamp: Timestamp;
+}
+
 // Keep legacy interface for migration compatibility
 export interface CheckInLog {
   id: string;
@@ -392,6 +402,24 @@ export const getCheckInLogs = async (uid: string, habitId?: string): Promise<Che
     }
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs.map(d => d.data() as CheckInLog);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+    return [];
+  }
+};
+
+// ─── Chat Messages ───
+
+export const getMessages = async (uid: string, limitCount: number = 50): Promise<Message[]> => {
+  const path = `users/${uid}/messages`;
+  try {
+    const messagesRef = collection(db, 'users', uid, 'messages');
+    const q = query(messagesRef, orderBy('timestamp', 'desc'), limit(limitCount));
+    const querySnapshot = await getDocs(q);
+    const messages = querySnapshot.docs.map(d => d.data() as Message);
+    // Reverse so oldest first (chat order)
+    messages.reverse();
+    return messages;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
     return [];

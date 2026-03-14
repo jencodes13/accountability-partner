@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from routers import sessions, habits, photos, onboarding, reminders  # noqa: E402
+from routers import sessions, habits, photos, onboarding, reminders, messages  # noqa: E402
 from services.firebase_admin import initialize_firebase  # noqa: E402
 
 
@@ -46,6 +46,7 @@ app.include_router(habits.router, prefix="/api/habits", tags=["habits"])
 app.include_router(photos.router, prefix="/api/photos", tags=["photos"])
 app.include_router(onboarding.router, prefix="/api/onboarding", tags=["onboarding"])
 app.include_router(reminders.router, prefix="/api/reminders", tags=["reminders"])
+app.include_router(messages.router, prefix="/api/messages", tags=["messages"])
 
 
 @app.get("/health")

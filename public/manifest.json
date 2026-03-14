@@ -1,0 +1,30 @@
+{
+  "name": "Accountability Partner",
+  "short_name": "Partner",
+  "description": "A voice and vision enabled app to help you stay accountable to your habits.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1e2128",
+  "background_color": "#1e2128",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512x512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

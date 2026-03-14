@@ -15,7 +15,7 @@ import {
   Habit, UserProfile, HABIT_CATEGORY_LABELS,
   getCheckInSessions, CheckInSession, getRecentPhotos,
 } from '@/lib/db';
-import { Clock, BarChart3, LogIn, LogOut, Settings } from 'lucide-react';
+import { Clock, BarChart3, LogIn, LogOut, Settings, MessageCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
@@ -71,6 +71,7 @@ export default function Home() {
   const [habits, setHabits] = useState<Habit[]>([]);
   const [recentSession, setRecentSession] = useState<CheckInSession | null>(null);
   const [hasRecentPhoto, setHasRecentPhoto] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
@@ -78,6 +79,8 @@ export default function Home() {
   useEffect(() => {
     if (user) {
       loadData();
+    } else {
+      setDataLoading(false);
     }
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -126,6 +129,8 @@ export default function Home() {
     } catch (err) {
       console.error('Error loading dashboard data:', err);
       setProfile(userProfile);
+    } finally {
+      setDataLoading(false);
     }
   };
 
@@ -166,11 +171,9 @@ export default function Home() {
     }
   };
 
-  if (loading) {
+  if (loading || (user && dataLoading)) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background text-foreground">
-        <div className="text-muted-foreground text-sm">Loading...</div>
-      </div>
+      <div className="min-h-screen bg-background" />
     );
   }
 
@@ -273,6 +276,13 @@ export default function Home() {
       <header className="flex items-center justify-between px-6 pt-6 pb-2">
         <span className="text-sm font-medium text-foreground">{agentName}</span>
         <div className="flex items-center gap-1">
+          <Link
+            href="/messages"
+            className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded-full"
+            title="Messages"
+          >
+            <MessageCircle className="w-5 h-5" />
+          </Link>
           <Link
             href="/history"
             className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded-full"
