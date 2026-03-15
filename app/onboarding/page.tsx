@@ -17,7 +17,6 @@ interface OnboardingData {
   persona: Persona;
   language: string;
   dailyCheckInTime: string;
-  birthday: string;
   habits: {
     category: HabitCategory;
     label: string;
@@ -342,7 +341,6 @@ export default function OnboardingPage() {
     persona: 'friend',
     language: 'en',
     dailyCheckInTime: '20:00',
-    birthday: '',
     habits: [],
   });
   const [isSaving, setIsSaving] = useState(false);
@@ -498,7 +496,7 @@ export default function OnboardingPage() {
       });
       mediaStreamRef.current = stream;
 
-      audioContextRef.current = new window.AudioContext({ sampleRate: 16000 });
+      audioContextRef.current = new window.AudioContext();
       nextPlayTimeRef.current = audioContextRef.current.currentTime;
 
       const source = audioContextRef.current.createMediaStreamSource(stream);
@@ -530,11 +528,29 @@ export default function OnboardingPage() {
               const scaledLevel = Math.min(1, rms * 8);
               userAudioLevelRef.current = Math.max(userAudioLevelRef.current * 0.9, scaledLevel);
 
-              const pcm16 = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) {
-                pcm16[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+              // Resample from native rate to 16000Hz
+              const nativeRate = audioContextRef.current!.sampleRate;
+              const targetRate = 16000;
+              const ratio = nativeRate / targetRate;
+              const targetLength = Math.floor(inputData.length / ratio);
+              const resampled = new Float32Array(targetLength);
+              for (let i = 0; i < targetLength; i++) {
+                resampled[i] = inputData[Math.floor(i * ratio)];
               }
-              const base64Data = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
+
+              // Convert to PCM16
+              const pcm16 = new Int16Array(resampled.length);
+              for (let i = 0; i < resampled.length; i++) {
+                pcm16[i] = Math.max(-32768, Math.min(32767, resampled[i] * 32768));
+              }
+
+              // Base64 encode (chunked to avoid stack overflow)
+              const bytes = new Uint8Array(pcm16.buffer);
+              let binary = '';
+              for (let i = 0; i < bytes.length; i++) {
+                binary += String.fromCharCode(bytes[i]);
+              }
+              const base64Data = btoa(binary);
               wsRef.current!.send(JSON.stringify({ type: 'audio', data: base64Data }));
             };
             break;
@@ -593,7 +609,6 @@ export default function OnboardingPage() {
               persona: msg.persona || 'friend',
               language: msg.language || 'en',
               dailyCheckInTime: msg.dailyCheckInTime || '20:00',
-              birthday: msg.birthday || '',
               habits: (msg.habits || []).slice(0, 3).map((h: { category: string; label: string; identityStatement: string }) => ({
                 category: (HABIT_CATEGORIES as readonly string[]).includes(h.category) ? h.category as HabitCategory : 'exercise' as HabitCategory,
                 label: h.label || '',
@@ -667,7 +682,6 @@ export default function OnboardingPage() {
         persona: formData.persona,
         language: formData.language,
         dailyCheckInTime: formData.dailyCheckInTime,
-        birthday: formData.birthday,
         onboardingComplete: true,
         displayName: user.displayName || user.email?.split('@')[0] || '',
       } as any);
@@ -962,19 +976,19 @@ export default function OnboardingPage() {
         `}</style>
 
         {/* Controls */}
-        <div className="flex items-center justify-center gap-6 px-6 pb-8 pt-2">
+        <div className="flex items-center justify-center gap-4 px-6 pb-8 pt-2">
           <button
             onClick={toggleMic}
-            className="w-14 h-14 rounded-full flex items-center justify-center transition-all"
+            className="w-10 h-10 rounded-full flex items-center justify-center transition-all"
             style={{
-              backgroundColor: isMicMuted ? 'rgba(239, 68, 68, 0.15)' : 'rgba(130, 184, 154, 0.15)',
+              backgroundColor: isMicMuted ? 'rgba(239, 68, 68, 0.15)' : 'rgba(130, 184, 154, 0.08)',
               border: '1px solid',
-              borderColor: isMicMuted ? 'rgba(239, 68, 68, 0.3)' : 'rgba(130, 184, 154, 0.3)',
+              borderColor: isMicMuted ? 'rgba(239, 68, 68, 0.3)' : 'rgba(130, 184, 154, 0.15)',
             }}
           >
             {isMicMuted
-              ? <MicOff className="w-5 h-5" style={{ color: '#ef4444' }} />
-              : <Mic className="w-5 h-5" style={{ color: '#82b89a' }} />
+              ? <MicOff className="w-4 h-4" style={{ color: '#ef4444' }} />
+              : <Mic className="w-4 h-4" style={{ color: '#82b89a' }} />
             }
           </button>
 
@@ -1022,44 +1036,24 @@ export default function OnboardingPage() {
           </p>
         </div>
 
-        {/* Partner name + birthday */}
+        {/* Partner name */}
         <div
           className="rounded-2xl p-4 mb-3"
           style={{ backgroundColor: '#2e3440', border: '1px solid rgba(255,255,255,0.04)' }}
         >
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[11px] font-medium uppercase tracking-wide mb-1.5" style={{ color: '#7e8a96' }}>
-                Partner name
-              </label>
-              <input
-                value={formData.agentName}
-                onChange={e => setFormData({ ...formData, agentName: e.target.value })}
-                placeholder="What do you call them?"
-                className="w-full bg-transparent text-sm px-3 py-2 rounded-xl focus:outline-none focus:ring-1"
-                style={{
-                  color: '#e2e0e6',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                }}
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium uppercase tracking-wide mb-1.5" style={{ color: '#7e8a96' }}>
-                Birthday
-              </label>
-              <input
-                type="date"
-                value={formData.birthday}
-                onChange={e => setFormData({ ...formData, birthday: e.target.value })}
-                className="w-full bg-transparent text-sm px-3 py-2 rounded-xl focus:outline-none focus:ring-1"
-                style={{
-                  color: '#e2e0e6',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  colorScheme: 'dark',
-                }}
-              />
-            </div>
-          </div>
+          <label className="block text-[11px] font-medium uppercase tracking-wide mb-1.5" style={{ color: '#7e8a96' }}>
+            Partner name
+          </label>
+          <input
+            value={formData.agentName}
+            onChange={e => setFormData({ ...formData, agentName: e.target.value })}
+            placeholder="What do you call them?"
+            className="w-full bg-transparent text-sm px-3 py-2 rounded-xl focus:outline-none focus:ring-1"
+            style={{
+              color: '#e2e0e6',
+              border: '1px solid rgba(255,255,255,0.08)',
+            }}
+          />
         </div>
 
         {/* Persona */}
@@ -1068,15 +1062,15 @@ export default function OnboardingPage() {
           style={{ backgroundColor: '#2e3440', border: '1px solid rgba(255,255,255,0.04)' }}
         >
           <label className="block text-[11px] font-medium uppercase tracking-wide mb-3" style={{ color: '#7e8a96' }}>
-            Style
+            Feedback style
           </label>
           <div className="flex gap-2">
             {(['coach', 'friend', 'reflective'] as Persona[]).map(p => {
               const selected = formData.persona === p;
               const labels: Record<Persona, string> = {
-                coach: 'Coach',
-                friend: 'Friend',
-                reflective: 'Reflective',
+                coach: 'Direct',
+                friend: 'Encouraging',
+                reflective: 'Curious',
               };
               return (
                 <button
@@ -1179,15 +1173,8 @@ export default function OnboardingPage() {
                   value={habit.label}
                   onChange={e => updateHabit(i, 'label', e.target.value)}
                   placeholder="Your goal"
-                  className="w-full bg-transparent text-sm mb-1.5 focus:outline-none"
+                  className="w-full bg-transparent text-sm focus:outline-none"
                   style={{ color: '#e2e0e6' }}
-                />
-                <input
-                  value={habit.identityStatement}
-                  onChange={e => updateHabit(i, 'identityStatement', e.target.value)}
-                  placeholder="I am someone who..."
-                  className="w-full bg-transparent text-xs focus:outline-none"
-                  style={{ color: '#b0b8c4' }}
                 />
               </div>
             ))}
