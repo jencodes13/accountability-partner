@@ -1,6 +1,36 @@
 # Accomplishments
 
-## March 14, 2026
+## March 14, 2026 (Session 2)
+
+### Onboarding Voice Bug Fixes
+- Fixed stuck-listening bug: AudioContext was forcing 16kHz sample rate which browsers ignore — now uses native rate with manual resampling to 16kHz before sending to Gemini
+- Fixed base64 encoding: replaced spread operator with chunked loop to prevent stack overflow on large audio buffers
+- Switched onboarding voice from Zephyr to Puck (calmer, lower-pitched)
+- Shrunk mic toggle button — hands-free conversation is the default, mute is optional
+
+**Files modified:** `app/onboarding/page.tsx`, `backend/routers/onboarding.py`
+
+### Updated Onboarding Conversation Arc
+- New system prompt with 7-step flow: habit categories (light scaffolding), broad life question, per-habit follow-ups, tone preference, feedback lean, agent name
+- Conversational tone always stays friend; feedback lean (direct/encouraging/curious) determines how the agent delivers feedback during check-ins
+- Tool definition: identity statements no longer required (removed from required fields)
+
+**Files modified:** `backend/routers/onboarding.py`
+
+### Review Form Updates
+- Removed birthday field and identity statement inputs
+- Persona labels changed from Coach/Friend/Reflective to Direct/Encouraging/Curious
+- Section label changed from "Style" to "Feedback style"
+- Partner name field now full-width
+
+**Files modified:** `app/onboarding/page.tsx`
+**Files deleted:** `docs/superpowers/specs/2026-03-12-frontend-redesign-design.md`
+
+**Commit:** `a432d13c`
+
+---
+
+## March 14, 2026 (Session 1)
 
 ### Complete Backend Build
 - Built out all backend capabilities: voice onboarding WebSocket with Gemini Live, check-in sessions with `save_checkin_summary` tool calling, transcript persistence for all sessions
