@@ -79,8 +79,8 @@ export const HABIT_CATEGORIES = [
 export type HabitCategory = typeof HABIT_CATEGORIES[number];
 
 export const HABIT_CATEGORY_LABELS: Record<HabitCategory, string> = {
-  'alcohol': 'Alcohol / Drinking',
-  'sports-betting': 'Sports Betting',
+  'alcohol': 'Alcohol Consumption',
+  'sports-betting': 'Betting',
   'nutrition': 'Nutrition / Intentional Eating',
   'exercise': 'Movement / Exercise',
   'spending': 'Spending',
@@ -102,6 +102,7 @@ export interface UserProfile {
   birthday?: string; // e.g. "1994-03-15"
   agentName: string;
   persona: Persona;
+  voiceName?: string; // Gemini voice preset (e.g. "Aoede", "Charon") — falls back to persona mapping if unset
   language: string; // auto-detected from speech, defaults to 'en'
   dailyCheckInTime: string; // e.g. "20:00"
   onboardingComplete: boolean;

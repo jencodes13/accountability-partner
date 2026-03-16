@@ -26,6 +26,7 @@ async def complete_onboarding(user_id: str, data: dict):
     db.collection("users").document(user_id).update({
         "agentName": data["agentName"],
         "persona": data["persona"],
+        "voiceName": data.get("voiceName", "Aoede"),
         "language": data.get("language", "en"),
         "dailyCheckInTime": data.get("dailyCheckInTime", "20:00"),
         "onboardingComplete": True,

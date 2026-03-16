@@ -54,10 +54,10 @@ SESSION_TOOLS = types.Tool(
         types.FunctionDeclaration(
             name="save_checkin_summary",
             description=(
-                "Save the check-in session summary. Call this at the end of every session "
-                "after the closing ritual (identity anchor + micro-commitment). Include a "
-                "natural summary of what was discussed, which habits were covered, the "
-                "user's micro-commitment, any patterns you noticed, and streak updates."
+                "Save the check-in session summary. ONLY call this after a full conversation "
+                "with the user — NEVER on the first turn. You must have discussed at least "
+                "one habit, done the closing ritual (identity anchor + micro-commitment), "
+                "and finished speaking your closing message before calling this tool."
             ),
             parameters=types.Schema(
                 type="OBJECT",
@@ -129,9 +129,11 @@ async def voice_session(ws: WebSocket, user_id: str):
             sessions=recent_sessions,
         )
 
-        # 3. Select voice based on persona
+        # 3. Select voice — user's explicit choice first, then persona fallback
         persona = profile.get("persona", "friend")
-        voice_name = PERSONA_VOICES.get(persona, "Zephyr")
+        voice_name = profile.get("voiceName")
+        if not voice_name:
+            voice_name = PERSONA_VOICES.get(persona, "Zephyr")
 
         # 4. Connect to Gemini Live
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -147,18 +149,26 @@ async def voice_session(ws: WebSocket, user_id: str):
             tools=[SESSION_TOOLS],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                    prefix_padding_ms=20,
+                    silence_duration_ms=700,
+                )
+            ),
         )
 
         async with client.aio.live.connect(model=GEMINI_MODEL, config=config) as session:
             await ws.send_json({"type": "connected", "voice": voice_name, "persona": persona})
 
-            # Prompt the model to start the check-in conversation
-            user_name = profile.get("displayName", "there")
-            await session.send(input=f"The user {user_name} just connected for a check-in. Greet them and start the session.", end_of_turn=True)
-
             # 5. Bidirectional streaming
+            audio_chunk_count = 0
+
             async def forward_client_to_gemini():
                 """Receive audio from browser, forward to Gemini."""
+                nonlocal audio_chunk_count
                 try:
                     while True:
                         data = await ws.receive_text()
@@ -166,167 +176,199 @@ async def voice_session(ws: WebSocket, user_id: str):
 
                         if msg["type"] == "audio":
                             audio_bytes = base64.b64decode(msg["data"])
-                            await session.send_realtime_input(
-                                audio=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
-                            )
+                            audio_chunk_count += 1
+                            if audio_chunk_count <= 3 or audio_chunk_count % 50 == 0:
+                                print(f"[SESSION] >> Audio chunk #{audio_chunk_count} ({len(audio_bytes)} bytes)")
+                            try:
+                                await session.send_realtime_input(
+                                    audio=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
+                                )
+                            except Exception as e:
+                                print(f"[SESSION] !! Failed to send audio: {e}")
+                                break
+                        elif msg["type"] == "speech_start":
+                            print("[SESSION] >> speech_start (push-to-talk)")
+                            try:
+                                await session.send_realtime_input(activity_start=types.ActivityStart())
+                            except Exception as e:
+                                print(f"[SESSION] !! Failed to send activity_start: {e}")
+                        elif msg["type"] == "speech_end":
+                            print("[SESSION] >> speech_end (push-to-talk)")
+                            try:
+                                await session.send_realtime_input(activity_end=types.ActivityEnd())
+                            except Exception as e:
+                                print(f"[SESSION] !! Failed to send activity_end: {e}")
+                        elif msg["type"] == "photo":
+                            print("[SESSION] >> Photo received, analyzing with ADK agent...")
+                            try:
+                                from google.adk.runners import InMemoryRunner
+                                from google.genai import types as genai_types
+                                from agent.photo_agent import photo_analysis_agent
+
+                                # Create a runner for the photo analysis
+                                runner = InMemoryRunner(
+                                    agent=photo_analysis_agent,
+                                    app_name="photo_analyzer",
+                                )
+
+                                # Create a session
+                                session_service = runner.session_service
+                                photo_session = session_service.create_session(
+                                    app_name="photo_analyzer",
+                                    user_id=user_id,
+                                )
+
+                                # Decode the photo
+                                photo_bytes = base64.b64decode(msg["data"].split(",")[-1])
+
+                                # Run the agent with the photo
+                                content = genai_types.Content(
+                                    role="user",
+                                    parts=[
+                                        genai_types.Part(text="What do you see in this photo?"),
+                                        genai_types.Part(inline_data=genai_types.Blob(data=photo_bytes, mime_type="image/jpeg")),
+                                    ]
+                                )
+
+                                description = ""
+                                async for event in runner.run_async(
+                                    session_id=photo_session.id,
+                                    user_id=user_id,
+                                    new_message=content,
+                                ):
+                                    if event.content and event.content.parts:
+                                        for part in event.content.parts:
+                                            if part.text:
+                                                description += part.text
+
+                                description = description.strip()
+                                print(f"[SESSION] ADK photo description: {description}")
+
+                                # Inject into the live conversation
+                                await session.send_realtime_input(
+                                    text=f"The user just showed you a photo. Here's what's in it: {description}. Respond naturally — comment on what you see and connect it to their habits."
+                                )
+                            except Exception as e:
+                                print(f"[SESSION] !! Photo analysis failed: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                await session.send_realtime_input(
+                                    text="The user tried to share a photo but there was a technical issue. Let them know and continue the check-in."
+                                )
+                        elif msg["type"] == "audio_end":
+                            print("[SESSION] >> audio_stream_end (silence detected)")
+                            try:
+                                await session.send_realtime_input(audio_stream_end=True)
+                            except Exception as e:
+                                print(f"[SESSION] !! Failed to send audio_stream_end: {e}")
                         elif msg["type"] == "end":
+                            logger.info(">> Client sent 'end' signal")
                             break
                 except WebSocketDisconnect:
-                    pass
+                    logger.info(">> Client WebSocket disconnected")
+                except Exception as e:
+                    logger.error("Client->Gemini forward error: %s", e)
 
             async def forward_gemini_to_client():
                 """Receive audio/tool calls from Gemini, forward to browser."""
                 nonlocal saved_session_id
-
+                gemini_msg_count = 0
                 try:
-                    async for message in session.receive():
-                        # Handle tool calls
-                        tool_call = getattr(message, "tool_call", None)
-                        if tool_call and tool_call.function_calls:
-                            for fc in tool_call.function_calls:
-                                await ws.send_json({
-                                    "type": "tool_activity",
-                                    "tool": fc.name,
-                                })
+                    while True:
+                        print(f"[SESSION] Waiting for Gemini (msgs so far: {gemini_msg_count})")
+                        async for message in session.receive():
+                            gemini_msg_count += 1
+                            sc = getattr(message, "server_content", None)
+                            ha = bool(sc and getattr(sc, "model_turn", None) and sc.model_turn.parts and any(p.inline_data and p.inline_data.data for p in sc.model_turn.parts))
+                            tc = bool(sc and getattr(sc, "turn_complete", False))
+                            if gemini_msg_count <= 10 or gemini_msg_count % 20 == 0 or tc:
+                                print(f"[SESSION] << msg #{gemini_msg_count}: audio={ha} turn_complete={tc}")
 
-                                if fc.name == "save_checkin_summary":
-                                    args = fc.args or {}
+                            if tc:
+                                await ws.send_json({"type": "turn_complete"})
 
-                                    # Record tool call in transcript
-                                    transcript.append({
-                                        "role": "tool_call",
-                                        "tool": fc.name,
-                                        "args": args,
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    })
-
-                                    # Parse comma-separated lists
-                                    habits_str = args.get("habits_covered", "")
-                                    habits_covered = [h.strip() for h in habits_str.split(",") if h.strip()]
-
-                                    patterns_str = args.get("patterns_flagged", "")
-                                    patterns_flagged = [p.strip() for p in patterns_str.split(",") if p.strip()]
-
-                                    # Parse streak updates JSON
-                                    streak_updates = {}
-                                    streak_str = args.get("streak_updates", "{}")
-                                    try:
-                                        streak_updates = json.loads(streak_str) if streak_str else {}
-                                    except json.JSONDecodeError:
-                                        logger.warning("Failed to parse streak_updates: %s", streak_str)
-
-                                    # Save to Firestore (transcript appended in finally block)
-                                    saved_session_id = save_checkin_session(user_id, {
-                                        "summary": args.get("summary", ""),
-                                        "habitsCovered": habits_covered,
-                                        "microCommitment": args.get("micro_commitment", ""),
-                                        "patternsFlagged": patterns_flagged,
-                                        "streakUpdates": streak_updates,
-                                    })
-
-                                    # Update streaks
-                                    for habit_id, outcome in streak_updates.items():
-                                        update_streak(user_id, habit_id, outcome)
-
-                                    # Respond to tool call
-                                    await session.send(
-                                        input=types.LiveClientToolResponse(
-                                            function_responses=[
-                                                types.FunctionResponse(
-                                                    id=fc.id,
-                                                    name=fc.name,
-                                                    response={"status": "saved", "sessionId": saved_session_id},
-                                                )
-                                            ]
-                                        )
-                                    )
-
-                                    # Send session_summary for frontend UI
-                                    await ws.send_json({
-                                        "type": "session_summary",
-                                        "sessionId": saved_session_id,
-                                        "habitsCovered": habits_covered,
-                                        "habitsSkipped": [
-                                            h["id"] for h in habits
-                                            if h.get("id") not in habits_covered
-                                        ],
-                                        "commitments": [args.get("micro_commitment", "")],
-                                        "insight": args.get("summary", ""),
-                                        "streaks": streak_updates,
-                                    })
-                            continue
-
-                        server_content = getattr(message, "server_content", None)
-                        if not server_content:
-                            continue
-
-                        # Handle interruption
-                        if server_content.interrupted:
-                            await ws.send_json({"type": "interrupted"})
-                            continue
-
-                        # Forward audio and collect text transcript
-                        model_turn = getattr(server_content, "model_turn", None)
-                        if model_turn and model_turn.parts:
-                            for part in model_turn.parts:
-                                if part.inline_data and part.inline_data.data:
-                                    audio_b64 = base64.b64encode(part.inline_data.data).decode()
-                                    await ws.send_json({
-                                        "type": "audio",
-                                        "data": audio_b64,
-                                    })
-                                if part.text:
-                                    # Always record to transcript (including thinking text)
-                                    transcript.append({
-                                        "role": "agent",
-                                        "text": part.text,
-                                        "source": "model_turn",
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    })
-                                    # Only forward non-thinking text to frontend
-                                    if not part.text.strip().startswith("**"):
-                                        await ws.send_json({
-                                            "type": "transcript",
-                                            "role": "assistant",
-                                            "text": part.text,
+                            tool_call = getattr(message, "tool_call", None)
+                            if tool_call and tool_call.function_calls:
+                                for fc in tool_call.function_calls:
+                                    await ws.send_json({"type": "tool_activity", "tool": fc.name})
+                                    if fc.name == "save_checkin_summary":
+                                        args = fc.args or {}
+                                        transcript.append({"role": "tool_call", "tool": fc.name, "args": args, "timestamp": datetime.now(timezone.utc).isoformat()})
+                                        habits_str = args.get("habits_covered", "")
+                                        habits_covered = [h.strip() for h in habits_str.split(",") if h.strip()]
+                                        patterns_str = args.get("patterns_flagged", "")
+                                        patterns_flagged = [p.strip() for p in patterns_str.split(",") if p.strip()]
+                                        streak_updates = {}
+                                        streak_str = args.get("streak_updates", "{}")
+                                        try:
+                                            streak_updates = json.loads(streak_str) if streak_str else {}
+                                        except json.JSONDecodeError:
+                                            pass
+                                        saved_session_id = save_checkin_session(user_id, {
+                                            "summary": args.get("summary", ""),
+                                            "habitsCovered": habits_covered,
+                                            "microCommitment": args.get("micro_commitment", ""),
+                                            "patternsFlagged": patterns_flagged,
+                                            "streakUpdates": streak_updates,
                                         })
+                                        for habit_id, outcome in streak_updates.items():
+                                            update_streak(user_id, habit_id, outcome)
+                                        await session.send(input=types.LiveClientToolResponse(
+                                            function_responses=[
+                                                types.FunctionResponse(id=fc.id, name=fc.name, response={"status": "saved", "sessionId": saved_session_id})
+                                            ]
+                                        ))
+                                        await ws.send_json({
+                                            "type": "session_summary", "sessionId": saved_session_id,
+                                            "habitsCovered": habits_covered,
+                                            "habitsSkipped": [h["id"] for h in habits if h.get("id") not in habits_covered],
+                                            "commitments": [args.get("micro_commitment", "")],
+                                            "insight": args.get("summary", ""), "streaks": streak_updates,
+                                        })
+                                continue
 
-                        # Handle transcriptions — always record, selectively forward
-                        input_tx = getattr(server_content, "input_transcription", None)
-                        if input_tx and input_tx.text:
-                            transcript.append({
-                                "role": "user",
-                                "text": input_tx.text,
-                                "source": "input_transcription",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            })
-                            await ws.send_json({
-                                "type": "transcript",
-                                "role": "user",
-                                "text": input_tx.text,
-                            })
+                            if not sc:
+                                continue
+                            if sc.interrupted:
+                                await ws.send_json({"type": "interrupted"})
+                                continue
 
-                        output_tx = getattr(server_content, "output_transcription", None)
-                        if output_tx and output_tx.text:
-                            text = output_tx.text
-                            # Always record to transcript
-                            transcript.append({
-                                "role": "agent",
-                                "text": text,
-                                "source": "output_transcription",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            })
-                            # Only forward non-thinking text to frontend
-                            if not text.strip().startswith("**"):
-                                await ws.send_json({
-                                    "type": "transcript",
-                                    "role": "assistant",
-                                    "text": text,
-                                })
+                            model_turn = getattr(sc, "model_turn", None)
+                            if model_turn and model_turn.parts:
+                                for part in model_turn.parts:
+                                    if part.inline_data and part.inline_data.data:
+                                        await ws.send_json({"type": "audio", "data": base64.b64encode(part.inline_data.data).decode()})
+                                    if part.text:
+                                        transcript.append({"role": "agent", "text": part.text, "source": "model_turn", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                        if not part.text.strip().startswith("**"):
+                                            await ws.send_json({"type": "transcript", "role": "assistant", "text": part.text})
 
+                            input_tx = getattr(sc, "input_transcription", None)
+                            if input_tx and input_tx.text:
+                                transcript.append({"role": "user", "text": input_tx.text, "source": "input_transcription", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                await ws.send_json({"type": "transcript", "role": "user", "text": input_tx.text})
+
+                            output_tx = getattr(sc, "output_transcription", None)
+                            if output_tx and output_tx.text:
+                                transcript.append({"role": "agent", "text": output_tx.text, "source": "output_transcription", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                if not output_tx.text.strip().startswith("**"):
+                                    await ws.send_json({"type": "transcript", "role": "assistant", "text": output_tx.text})
+
+                        print(f"[SESSION] receive() ended after {gemini_msg_count} msgs — looping for next turn")
+                except WebSocketDisconnect:
+                    print("[SESSION] Client disconnected")
                 except Exception as e:
-                    logger.error("Gemini receive error: %s", e)
-                    await ws.send_json({"type": "error", "message": str(e)})
+                    print(f"[SESSION] !! Receive error: {e}")
+                    try:
+                        await ws.send_json({"type": "error", "message": str(e)})
+                    except Exception:
+                        pass
+
+            # Trigger greeting
+            user_name = profile.get("displayName", "there")
+            print(f"[SESSION] Sending greeting for {user_name}...")
+            await session.send(input=f"The user {user_name} just connected for a check-in. Greet them and start the session.", end_of_turn=True)
+            print("[SESSION] Greeting sent!")
 
             # Run both directions concurrently
             await asyncio.gather(

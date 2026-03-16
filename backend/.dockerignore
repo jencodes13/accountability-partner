@@ -2,8 +2,5 @@ __pycache__
 *.pyc
 .env
 .env.local
-service-account.json
-*.md
+venv/
 .git
-.gitignore
-deploy.sh

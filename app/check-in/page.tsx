@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
-import { Mic, MicOff, Square } from 'lucide-react';
+import { Mic, Camera } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getUserProfile, getHabits, Habit, UserProfile, HABIT_CATEGORY_LABELS, HabitCategory } from '@/lib/db';
@@ -225,6 +225,10 @@ const AURORA_KEYFRAMES = `
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
   }
+  @keyframes pttPulse {
+    0%, 100% { border-color: rgba(130, 184, 154, 0.5); }
+    50% { border-color: rgba(130, 184, 154, 0.2); }
+  }
 `;
 
 // ─── Timer Hook ───
@@ -266,7 +270,7 @@ export default function CheckInPage() {
   // Session state
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isTalking, setIsTalking] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [currentSpeaker, setCurrentSpeaker] = useState<'agent' | 'user' | null>(null);
   const [activeHabitIndex, setActiveHabitIndex] = useState(0);
@@ -284,6 +288,10 @@ export default function CheckInPage() {
   const agentAudioLevelRef = useRef(0);
   const audioLevelRafRef = useRef<number>(0);
 
+  // Photo state
+  const [photoSent, setPhotoSent] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Debrief state
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
@@ -294,16 +302,17 @@ export default function CheckInPage() {
   // Refs
   const audioContextRef = useRef<AudioContext | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
+  const playbackGainRef = useRef<GainNode | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
-  const isMicMutedRef = useRef(false);
+  const isTalkingRef = useRef(false);
   const isConnectedRef = useRef(false);
   const currentSpeakerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep refs in sync
-  useEffect(() => { isMicMutedRef.current = isMicMuted; }, [isMicMuted]);
+  useEffect(() => { isTalkingRef.current = isTalking; }, [isTalking]);
   useEffect(() => { isConnectedRef.current = isConnected; }, [isConnected]);
 
   // Audio level animation loop — pushes combined level to React state at ~60fps
@@ -391,6 +400,7 @@ export default function CheckInPage() {
     });
     setIsConnected(false);
     setIsConnecting(false);
+    setIsTalking(false);
     setSessionEnded(true);
     setCurrentSpeaker(null);
     cleanup();
@@ -427,7 +437,7 @@ export default function CheckInPage() {
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(ctx.destination);
+      source.connect(playbackGainRef.current || ctx.destination);
 
       const currentTime = ctx.currentTime;
       if (nextPlayTimeRef.current < currentTime) {
@@ -482,11 +492,13 @@ export default function CheckInPage() {
       mediaStreamRef.current = stream;
 
       audioContextRef.current = new window.AudioContext({ sampleRate: 16000 });
-      playbackContextRef.current = new window.AudioContext();
+      playbackContextRef.current = new window.AudioContext({ sampleRate: 24000 });
+      playbackGainRef.current = playbackContextRef.current.createGain();
+      playbackGainRef.current.connect(playbackContextRef.current.destination);
       nextPlayTimeRef.current = playbackContextRef.current.currentTime;
 
       const source = audioContextRef.current.createMediaStreamSource(stream);
-      const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+      const processor = audioContextRef.current.createScriptProcessor(2048, 1, 1);
       processorRef.current = processor;
 
       source.connect(processor);
@@ -508,14 +520,19 @@ export default function CheckInPage() {
             setIsConnecting(false);
 
             processor.onaudioprocess = (e) => {
-              if (isMicMutedRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+              // Zero the output buffer to prevent mic audio from playing through speakers
+              const outputData = e.outputBuffer.getChannelData(0);
+              outputData.fill(0);
+
+              if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
               const inputData = e.inputBuffer.getChannelData(0);
 
-              // Calculate user audio level (RMS)
+              // Calculate RMS for aurora visualization
               const rms = calculateRMS(inputData);
               const scaledLevel = Math.min(1, rms * 8);
               userAudioLevelRef.current = Math.max(userAudioLevelRef.current * 0.9, scaledLevel);
 
+              // Always send audio (continuous streaming for VAD)
               const pcm16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
                 pcm16[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
@@ -538,10 +555,24 @@ export default function CheckInPage() {
             break;
 
           case 'interrupted':
-            if (playbackContextRef.current) {
+            if (playbackGainRef.current && playbackContextRef.current) {
+              playbackGainRef.current.disconnect();
+              playbackGainRef.current = playbackContextRef.current.createGain();
+              playbackGainRef.current.connect(playbackContextRef.current.destination);
               nextPlayTimeRef.current = playbackContextRef.current.currentTime;
             }
             agentAudioLevelRef.current = 0;
+            setCurrentSpeaker(null);
+            setCurrentAgentText('');
+            break;
+
+          case 'turn_complete':
+            setCurrentSpeaker(null);
+            agentAudioLevelRef.current = 0;
+            if (currentSpeakerTimeoutRef.current) {
+              clearTimeout(currentSpeakerTimeoutRef.current);
+              currentSpeakerTimeoutRef.current = null;
+            }
             break;
 
           case 'transcript':
@@ -623,23 +654,54 @@ export default function CheckInPage() {
     }
   };
 
-  // ─── Mic Toggle ───
+  // ─── Push-to-Talk Toggle ───
 
-  const toggleMic = () => {
-    const newMuted = !isMicMuted;
-    setIsMicMuted(newMuted);
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = !newMuted;
-      });
+  const toggleTalk = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (isTalking) {
+      setIsTalking(false);
+      wsRef.current.send(JSON.stringify({ type: 'speech_end' }));
+    } else {
+      setIsTalking(true);
+      wsRef.current.send(JSON.stringify({ type: 'speech_start' }));
     }
   };
+
+  // ─── Photo Capture ───
+
+  const handlePhotoCapture = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = reader.result as string;
+      wsRef.current?.send(JSON.stringify({ type: 'photo', data: base64 }));
+      setPhotoSent(true);
+      setTimeout(() => setPhotoSent(false), 2000);
+    };
+    reader.readAsDataURL(file);
+
+    // Reset input so same file can be re-selected
+    e.target.value = '';
+  }, []);
 
   // ─── Loading / Auth Guard ───
 
   if (loading || !user || !profileChecked) {
     return (
-      <div className="min-h-screen bg-background" />
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: 'linear-gradient(180deg, #1e2128 0%, #262b34 100%)' }}
+      >
+        <div className="flex flex-col items-center gap-3">
+          <div
+            className="w-10 h-10 rounded-full animate-pulse"
+            style={{ backgroundColor: 'rgba(130, 184, 154, 0.2)' }}
+          />
+          <p className="text-sm" style={{ color: '#7e8a96' }}>Loading...</p>
+        </div>
+      </div>
     );
   }
 
@@ -669,7 +731,7 @@ export default function CheckInPage() {
 
   const getHabitShortLabel = (habit: Habit): string => {
     const labels: Record<string, string> = {
-      'alcohol': 'Alcohol',
+      'alcohol': 'Alcohol Consumption',
       'sports-betting': 'Betting',
       'nutrition': 'Nutrition',
       'exercise': 'Exercise',
@@ -823,7 +885,7 @@ export default function CheckInPage() {
 
           {/* Streak row */}
           {habits.length > 0 && (
-            <div className="w-full grid grid-cols-3 gap-2 mb-8">
+            <div className={`w-full grid gap-2 mb-8 ${habits.length <= 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
               {habits.map(habit => {
                 const streak = debriefData.streaks[habit.id] ?? habit.currentStreak;
                 const isMilestoneHabit = debriefData.milestoneHabit === habit.id;
@@ -944,180 +1006,69 @@ export default function CheckInPage() {
       {/* ─── Live Session ─── */}
       {isConnected && (
         <>
-          {/* Top Bar */}
-          <header className="flex items-center justify-between px-5 pt-5 pb-3">
-            {/* Timer */}
-            <div
-              className="text-sm font-mono tabular-nums"
-              style={{ color: '#b0b8c4' }}
-            >
-              {timer.formatted}
-            </div>
-
-            {/* Current habit */}
-            <div
-              className="text-sm font-medium"
-              style={{ color: '#82b89a' }}
-            >
-              {currentHabitLabel}
-            </div>
-
-            {/* End button */}
-            <button
-              onClick={endSession}
-              className="w-9 h-9 rounded-full flex items-center justify-center transition-opacity hover:opacity-80"
-              style={{
-                backgroundColor: 'rgba(239, 68, 68, 0.12)',
-              }}
-              title="End session"
-            >
-              <Square
-                className="w-3.5 h-3.5"
-                style={{ color: '#ef4444' }}
-                fill="#ef4444"
-              />
-            </button>
-          </header>
-
-          {/* Habit Progress Pills */}
-          {habits.length > 0 && (
-            <div className="flex flex-wrap justify-center gap-2 px-5 pb-4">
-              {habits.map((habit, idx) => {
-                const isCovered = coveredHabits.has(habit.id);
-                const isActive = idx === activeHabitIndex && !isCovered;
-                const isPending = !isCovered && !isActive;
-                return (
-                  <div
-                    key={habit.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
-                    style={{
-                      backgroundColor: isCovered
-                        ? 'rgba(130, 184, 154, 0.15)'
-                        : isActive
-                          ? 'rgba(130, 184, 154, 0.08)'
-                          : 'rgba(255,255,255,0.03)',
-                      color: isCovered
-                        ? '#82b89a'
-                        : isActive
-                          ? '#82b89a'
-                          : '#7e8a96',
-                      border: '1px solid',
-                      borderColor: isCovered
-                        ? 'rgba(130, 184, 154, 0.3)'
-                        : isActive
-                          ? 'rgba(130, 184, 154, 0.2)'
-                          : 'rgba(255,255,255,0.08)',
-                      opacity: isPending ? 0.5 : 1,
-                    }}
-                  >
-                    {isCovered && <span>{'\u2713'}</span>}
-                    {isActive && (
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{
-                          backgroundColor: '#82b89a',
-                          animation: 'pulseDot 1.5s ease-in-out infinite',
-                        }}
-                      />
-                    )}
-                    <span>{getHabitShortLabel(habit)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Center: Aurora Orb */}
+          {/* Center: Aurora Orb — the orb IS the interface */}
           <div className="flex-1 flex flex-col items-center justify-center px-6">
             <Aurora state={auroraState} audioLevel={audioLevel} />
             <p
               className="text-sm mt-6"
-              style={{ color: '#7e8a96' }}
+              style={{ color: '#7e8a96', minHeight: '1.5em' }}
             >
               {currentSpeaker === 'agent'
-                ? `${agentName} is speaking...`
-                : currentSpeaker === 'user'
-                  ? 'Listening...'
-                  : 'Listening...'}
+                ? 'Speaking...'
+                : 'Listening...'}
             </p>
           </div>
 
-          {/* Live Transcript */}
-          <div
-            className="mx-4 mb-4 rounded-2xl px-4 py-3"
-            style={{
-              backgroundColor: '#2e3440',
-              border: '1px solid rgba(255,255,255,0.04)',
-              minHeight: 64,
-            }}
-          >
-            {/* Last complete agent message — prominent, re-readable */}
-            {lastAgentMessage && !currentAgentText && (
-              <p
-                className="text-sm leading-relaxed"
-                style={{ color: '#e2e0e6' }}
-              >
-                {lastAgentMessage}
-              </p>
-            )}
-
-            {/* Current agent speech building up with blinking cursor */}
-            {currentAgentText && (
-              <p
-                className="text-sm leading-relaxed"
-                style={{ color: '#e2e0e6' }}
-              >
-                {currentAgentText}
-                <span
-                  className="inline-block w-[2px] h-[14px] ml-0.5 align-middle"
+          {/* Bottom: camera + End session */}
+          <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-2">
+            <div className="flex items-center gap-4">
+              {currentSpeaker !== 'agent' && (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center justify-center rounded-full transition-opacity hover:opacity-80"
                   style={{
-                    backgroundColor: '#82b89a',
-                    animation: 'blinkCursor 1s step-end infinite',
+                    width: 40,
+                    height: 40,
+                    backgroundColor: 'rgba(130, 184, 154, 0.15)',
+                    border: '1px solid rgba(130, 184, 154, 0.3)',
+                    color: '#82b89a',
                   }}
-                />
-              </p>
-            )}
-
-            {/* Fallback when no agent text yet */}
-            {!lastAgentMessage && !currentAgentText && (
+                  aria-label="Take photo"
+                >
+                  <Camera className="w-[18px] h-[18px]" />
+                </button>
+              )}
+            </div>
+            {photoSent && (
               <p
-                className="text-sm italic"
-                style={{ color: '#7e8a96' }}
+                className="text-xs transition-opacity"
+                style={{ color: '#82b89a' }}
               >
-                Waiting for {agentName}...
+                Photo sent
               </p>
             )}
-
-            {/* Last user text — smaller, muted */}
-            {lastUserText && (
-              <p
-                className="text-xs mt-2"
-                style={{ color: '#7e8a96' }}
-              >
-                You: {lastUserText}
-              </p>
-            )}
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              onChange={handlePhotoCapture}
+            />
+            <button
+              onClick={endSession}
+              className="text-xs transition-opacity hover:opacity-80"
+              style={{ color: '#7e8a96' }}
+            >
+              End session
+            </button>
           </div>
 
-          {/* Bottom Controls */}
-          <div className="flex items-center justify-center gap-6 px-6 pb-8 pt-2">
-            {/* Mute toggle (larger) */}
-            <button
-              onClick={toggleMic}
-              className="w-16 h-16 rounded-full flex items-center justify-center transition-all"
-              style={{
-                backgroundColor: isMicMuted ? 'rgba(239, 68, 68, 0.15)' : 'rgba(130, 184, 154, 0.15)',
-                border: '1px solid',
-                borderColor: isMicMuted ? 'rgba(239, 68, 68, 0.3)' : 'rgba(130, 184, 154, 0.3)',
-              }}
-              title={isMicMuted ? 'Unmute' : 'Mute'}
-            >
-              {isMicMuted
-                ? <MicOff className="w-6 h-6" style={{ color: '#ef4444' }} />
-                : <Mic className="w-6 h-6" style={{ color: '#82b89a' }} />
-              }
-            </button>
-
+          {/* Hidden: transcript + habit pills kept for data accumulation */}
+          <div style={{ display: 'none' }}>
+            {lastAgentMessage && <span>{lastAgentMessage}</span>}
+            {currentAgentText && <span>{currentAgentText}</span>}
+            {lastUserText && <span>{lastUserText}</span>}
           </div>
         </>
       )}

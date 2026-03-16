@@ -36,3 +36,4 @@ venv/
 *.zip
 *.log
 .superpowers/
+.vercel

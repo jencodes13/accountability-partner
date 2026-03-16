@@ -34,54 +34,112 @@ GEMINI_MODEL = "gemini-2.5-flash-native-audio-latest"
 # ─── Onboarding system prompt ───
 
 ONBOARDING_PROMPT = """You are a warm, friendly onboarding guide for an accountability partner app. \
-Your job is to have a natural voice conversation to learn about the user and set up their \
-accountability partner.
+Your job is to have a short, natural voice conversation to learn about the user and set up their \
+accountability partner. Keep it brisk — 3 to 4 minutes max.
 
-OPENING: Start with a warm welcome — 2-3 sentences max. Then offer habit categories with \
-light scaffolding: "I can help with things like exercise, nutrition, spending, screen time, \
-sleep, journaling, sports betting, or alcohol. What resonates with you?"
+OPENING: Start with exactly this: "Hey, it's great to meet you. I'm here to be your \
+accountability partner. What's your name?" Wait for them to respond with their name. \
+Then say: "Great to meet you, [name]. I can help with things like exercise, nutrition, \
+spending, screen time, sleep, journaling, betting, or alcohol consumption. What resonates \
+with you?"
 
 PACING: You must ask one question at a time and WAIT for the user to respond before continuing. \
 Do NOT gather multiple pieces of information from a single response and assume you have everything. \
-Do NOT call the save tool until you have completed the full conversation arc below.
+Do NOT call the save tool until you have completed the ENTIRE conversation arc below AND finished \
+speaking your wrap-up message. The tool call must be the very last thing you do.
 
 CONVERSATION ARC — follow this order:
 
-1. HABITS (up to 3): After offering the categories, let the user pick. For each one, confirm \
-the category and ask for a short goal. Ask "anything else you want to work on?" until they're \
-done or hit 3.
+1. HABITS (up to 3): After offering the categories, let the user pick. Confirm what you heard. \
+Ask "anything else you want to work on?" If they say no or indicate they're done \
+with fewer than 3, that's fine — say something like "Great start! We can always add more \
+habits later." If they try to add more than 3, let them know: "I can only track up to 3 \
+habits right now, but we're working on supporting more in the future. Which 3 matter most \
+to you?" Do NOT ask per-habit \
+goals — for most habits the goal is obvious (sleep more, eat better, journal consistently, \
+spend less). Only ask for clarification if the habit is genuinely ambiguous, like spending \
+("Are you looking to budget overall, or cut back on something specific?"). \
+IMPORTANT: Only accept answers that match or relate to the offered categories. If someone \
+says something random like "cheese" or "purple" when you ask about habits, that is NOT a \
+valid habit — say "Ha, not sure I have a category for that one! Let me ask again — which \
+of those areas would you like to focus on?" and re-offer the list. \
+Do NOT ask clarifying questions for straightforward habits. Exercise, nutrition, sleep, \
+journaling, screen time, alcohol consumption, and betting are all self-explanatory — just \
+confirm and move on. ONLY ask for clarification on spending (budget vs. specific cutback).
 
-2. GET TO KNOW THEM: Once habits are set, ask a broad life question: "Tell me a little about \
-yourself — what's your day-to-day like?" Let them share. This is about rapport.
+2. GET TO KNOW THEM: Ask: "What made you want to start working on these right now?" \
+This is about motivation and life context — not obstacles. Let them share. Whatever they \
+say helps the check-in agent personalize future conversations. Do NOT ask about obstacles \
+or what gets in the way — that's for the check-ins to uncover over time.
 
-3. HABIT FOLLOW-UPS: For each habit they picked, ask: "What's your relationship with [habit] \
-right now?" Keep it conversational, not interrogative. One habit at a time.
+3. STYLE: "When things get tough with your habits, do you want someone who's direct with you, \
+someone encouraging, or someone who asks questions and lets you figure it out?" Map their \
+answer: direct = coach, encouraging = friend, questions = reflective.
 
-4. TONE PREFERENCE: "When you're sticking to your goals, do you want someone to hype you up, \
-keep it chill, or ask you what it felt like?" This helps calibrate how the agent celebrates wins.
+4. AGENT NAME: "Last thing — what do you want to call me? Pick whatever feels right." \
+When they give a name, REPEAT IT BACK to confirm: "Alright, [agent name] it is!"
 
-5. FEEDBACK LEAN: "Everyone needs different things at different times. But if you had to pick \
-a lean — more direct, more encouraging, or more the type to ask questions and let you figure \
-it out?" Map their answer: direct = coach, encouraging = friend, questions = reflective. \
-This determines how feedback is delivered, not the overall conversational tone.
+5. WRAP UP: Say your full closing message. Include a brief, warm note that this app is \
+a great tool to help with accountability, but it's not a replacement for professional \
+support — something natural like "And just so you know, I'm a great tool to keep you \
+on track, but I always recommend working with a professional too if you need one." \
+Then close warmly: "I'm excited to help you, [user name]. I'll see you at your first \
+check-in!" Keep the whole wrap-up to 2-3 sentences. \
+THEN, only AFTER you have completely finished speaking your closing, call the \
+save_onboarding_results tool. Do NOT call the tool while still speaking. \
+The tool call must be the absolute last thing you do.
 
-6. AGENT NAME: "One last thing — what do you want to call me? Pick whatever feels right."
-
-7. WRAP UP: Summarize what you heard. Then call the save_onboarding_results tool.
+RESPONSE QUALITY:
+- NEVER respond with generic filler like "That's great" or "Awesome, thanks for sharing." \
+After every user response, give a brief, direct acknowledgement before moving to your \
+next question. Keep it natural and conversational — do NOT quote the user's words back \
+or use their exact phrases in quotation marks. Examples:
+  - User picks exercise and nutrition: "Exercise and nutrition, solid combo. Anything else?"
+  - User says they work nights: "Night shifts are tough — that definitely changes the game \
+    for sleep and eating. So when things get tough..."
+  - User says they have two kids: "Two kids, wow — I can see why screen time and sleep are \
+    on your list. So what usually gets in the way..."
+  - User mentions stress eating: "Stress eating is real, especially when life gets busy. \
+    OK so when things get tough..."
+- Keep these reflections to ONE sentence. Don't over-elaborate. Reflect, then move on.
 
 CONVERSATION GUIDELINES:
-- Your conversational tone is always warm and friendly (friend style), regardless of their \
-feedback lean answer.
+- Your conversational tone is always warm and friendly, regardless of their style answer.
 - When mapping habits to categories, pick the closest match. If they say "I want to stop \
 gambling on basketball games" that's sports-betting. If they say "I want to eat better" \
 that's nutrition.
 - Keep it to 3 habits max. If they mention more, help them prioritize.
-- If interrupted, stop and listen. Pick back up naturally.
+- Set reasonable default goal labels based on context: "sleep" → "Better sleep", \
+"nutrition" → "Healthier eating", "exercise" → "Regular exercise", "alcohol" → "Managing alcohol consumption", \
+"journaling" → "Daily journaling", etc.
+- If interrupted, STOP immediately and listen to what the user is saying. Their \
+interruption takes priority over whatever you were about to say. Respond to their \
+interruption first, then pick back up naturally.
+- NAME CORRECTIONS ARE TOP PRIORITY: If the user says anything like "actually my name \
+is...", "it's pronounced...", "no, it's...", or corrects their name in ANY way, \
+immediately acknowledge it: "Oh sorry about that, [corrected name]!" and use the \
+corrected name for the rest of the conversation and in the save tool. Getting someone's \
+name right matters more than any question in the arc.
 - If asked to repeat, repeat clearly without over-explaining.
-- If there's silence, wait a beat, then gently prompt: "Still there? No rush."
 - If asked about the app: "This app helps you build habits with daily voice check-ins. \
 I'll be your partner — checking in on your progress, noticing patterns, and helping \
 you stay consistent."
+- If the user's response is completely inaudible or clearly just static/noise with no \
+recognizable words at all, respond warmly: "Sorry, I didn't catch that. Could you say \
+that again?" But short answers like a single name or a single word ARE valid — do not \
+ask them to repeat a short but clear answer.
+- If the user says something off-topic or doesn't actually answer the question (e.g., you \
+ask about habits and they say "cheese"), gently redirect: "Ha, I like the energy — but \
+let me ask that again..." and re-ask the question in slightly different words. Never \
+shame them, but don't move on without an actual answer.
+
+VOCABULARY BOOST — listen specifically for these terms as the user will likely say them:
+- Habit categories: exercise, nutrition, spending, screen time, sleep, journaling, betting, \
+alcohol, alcohol consumption, gambling, budgeting, workouts, steps
+- Style preferences: direct, encouraging, curious, coach, friend, reflective
+- Common names: This is a voice app — when users say their name, listen carefully. Common \
+names include Jenny, Jennie, Jennifer, Mike, Michael, Chris, Christine, Sarah, Sara, Alex, \
+Sam, etc. Pay close attention to spelling variations.
 """
 
 # ─── Tool definition for structured data extraction ───
@@ -91,11 +149,9 @@ ONBOARDING_TOOL = types.Tool(
         types.FunctionDeclaration(
             name="save_onboarding_results",
             description=(
-                "Call this ONLY after you have completed the full conversation arc: "
-                "gathered habits (with categories and goal labels), asked the life question, "
-                "done habit follow-ups, asked about tone preference and feedback lean, "
-                "and gotten the agent name. Summarize everything back to the user and "
-                "get their confirmation before calling this tool."
+                "Call this ONLY after you have finished speaking your complete closing "
+                "message. The tool call must be the very last action — never call it "
+                "while you are still talking."
             ),
             parameters=types.Schema(
                 type="OBJECT",
@@ -189,23 +245,34 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Puck")
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
                 )
             ),
             system_instruction=ONBOARDING_PROMPT,
             tools=[ONBOARDING_TOOL],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                    prefix_padding_ms=20,
+                    silence_duration_ms=700,
+                )
+            ),
         )
 
+        print(f"[ONBOARD] Connecting to Gemini model: {GEMINI_MODEL}")
         async with client.aio.live.connect(model=GEMINI_MODEL, config=config) as session:
+            print("[ONBOARD] Gemini session connected!")
             await ws.send_json({"type": "connected"})
 
-            # Prompt the model to introduce itself and start the conversation
-            await session.send(input="The user just connected. Introduce yourself warmly and start the onboarding conversation. Remember to wait for their responses before moving on.", end_of_turn=True)
+            audio_chunk_count = 0
 
             async def forward_client_to_gemini():
                 """Receive audio from browser, forward to Gemini Live."""
+                nonlocal audio_chunk_count
                 try:
                     while True:
                         data = await ws.receive_text()
@@ -213,129 +280,132 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
 
                         if msg["type"] == "audio":
                             audio_bytes = base64.b64decode(msg["data"])
-                            await session.send_realtime_input(
-                                audio=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
-                            )
+                            audio_chunk_count += 1
+                            if audio_chunk_count <= 3 or audio_chunk_count % 50 == 0:
+                                print(f"[ONBOARD] >> Audio chunk #{audio_chunk_count} ({len(audio_bytes)} bytes)")
+                            try:
+                                await session.send_realtime_input(
+                                    audio=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
+                                )
+                            except Exception as e:
+                                print(f"[ONBOARD] !! Failed to send audio: {e}")
+                                break
+                        elif msg["type"] == "speech_start":
+                            print("[ONBOARD] >> speech_start (push-to-talk)")
+                            try:
+                                await session.send_realtime_input(activity_start=types.ActivityStart())
+                            except Exception as e:
+                                print(f"[ONBOARD] !! Failed to send activity_start: {e}")
+                        elif msg["type"] == "speech_end":
+                            print("[ONBOARD] >> speech_end (push-to-talk)")
+                            try:
+                                await session.send_realtime_input(activity_end=types.ActivityEnd())
+                            except Exception as e:
+                                print(f"[ONBOARD] !! Failed to send activity_end: {e}")
+                        elif msg["type"] == "audio_end":
+                            print("[ONBOARD] >> audio_stream_end (silence detected)")
+                            try:
+                                await session.send_realtime_input(audio_stream_end=True)
+                            except Exception as e:
+                                print(f"[ONBOARD] !! Failed to send audio_stream_end: {e}")
                         elif msg["type"] == "end":
+                            logger.info(">> Client sent 'end' signal")
                             break
                 except WebSocketDisconnect:
-                    pass
+                    logger.info(">> Client WebSocket disconnected")
+                except Exception as e:
+                    logger.error("Client->Gemini forward error: %s", e)
 
             async def forward_gemini_to_client():
                 """Receive audio/tool calls from Gemini, forward to browser."""
+                gemini_msg_count = 0
                 try:
-                    async for message in session.receive():
-                        # Handle tool calls
-                        tool_call = getattr(message, "tool_call", None)
-                        if tool_call and tool_call.function_calls:
-                            for fc in tool_call.function_calls:
-                                if fc.name == "save_onboarding_results":
-                                    args = fc.args or {}
-                                    habits = _parse_habits_from_tool_args(args)
+                    while True:
+                        print(f"[ONBOARD] Waiting for Gemini (msgs so far: {gemini_msg_count})")
+                        async for message in session.receive():
+                            gemini_msg_count += 1
+                            sc = getattr(message, "server_content", None)
+                            ha = bool(sc and getattr(sc, "model_turn", None) and sc.model_turn.parts and any(getattr(p, "inline_data", None) and p.inline_data.data for p in sc.model_turn.parts))
+                            tc = bool(sc and getattr(sc, "turn_complete", False))
+                            if gemini_msg_count <= 10 or gemini_msg_count % 20 == 0 or tc:
+                                print(f"[ONBOARD] << msg #{gemini_msg_count}: audio={ha} turn_complete={tc}")
 
-                                    # Record tool call in transcript
-                                    transcript.append({
-                                        "role": "tool_call",
-                                        "tool": fc.name,
-                                        "args": args,
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    })
+                            # Forward turn_complete to frontend
+                            if tc:
+                                await ws.send_json({"type": "turn_complete"})
 
-                                    # Send structured data to frontend
-                                    await ws.send_json({
-                                        "type": "onboarding_complete",
-                                        "agentName": args.get("agentName", ""),
-                                        "persona": args.get("persona", "friend"),
-                                        "language": "en",
-                                        "dailyCheckInTime": "20:00",
-                                        "birthday": "",
-                                        "habits": habits,
-                                    })
+                            tool_call = getattr(message, "tool_call", None)
+                            if tool_call and tool_call.function_calls:
+                                for fc in tool_call.function_calls:
+                                    if fc.name == "save_onboarding_results":
+                                        args = fc.args or {}
+                                        habits = _parse_habits_from_tool_args(args)
+                                        transcript.append({"role": "tool_call", "tool": fc.name, "args": args, "timestamp": datetime.now(timezone.utc).isoformat()})
 
-                                    # Respond to tool call so model can wrap up
-                                    await session.send(
-                                        input=types.LiveClientToolResponse(
-                                            function_responses=[
-                                                types.FunctionResponse(
-                                                    id=fc.id,
-                                                    name=fc.name,
-                                                    response={"status": "saved", "message": "Onboarding data saved successfully."},
-                                                )
-                                            ]
-                                        )
-                                    )
-                            continue
-
-                        server_content = getattr(message, "server_content", None)
-                        if not server_content:
-                            continue
-
-                        # Handle interruption
-                        if server_content.interrupted:
-                            await ws.send_json({"type": "interrupted"})
-                            continue
-
-                        # Forward audio and collect text transcript
-                        model_turn = getattr(server_content, "model_turn", None)
-                        if model_turn and model_turn.parts:
-                            for part in model_turn.parts:
-                                if part.inline_data and part.inline_data.data:
-                                    audio_b64 = base64.b64encode(part.inline_data.data).decode()
-                                    await ws.send_json({
-                                        "type": "audio",
-                                        "data": audio_b64,
-                                    })
-                                if part.text:
-                                    # Always record to transcript (including thinking text)
-                                    transcript.append({
-                                        "role": "agent",
-                                        "text": part.text,
-                                        "source": "model_turn",
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    })
-                                    # Only forward non-thinking text to frontend
-                                    if not part.text.strip().startswith("**"):
-                                        await ws.send_json({
-                                            "type": "transcript",
-                                            "role": "assistant",
-                                            "text": part.text,
+                                        # Save directly to Firestore (no review form)
+                                        # Map persona to a voice — coach gets masculine, friend/reflective get feminine
+                                        persona_voice_map = {"coach": "Orus", "friend": "Aoede", "reflective": "Leda"}
+                                        detected_persona = args.get("persona", "friend")
+                                        default_voice = persona_voice_map.get(detected_persona, "Aoede")
+                                        print(f"[ONBOARD] Saving onboarding: {args.get('agentName')}, persona={detected_persona}, voice={default_voice}, habits={len(habits)}")
+                                        await complete_onboarding(user_id, {
+                                            "agentName": args.get("agentName", ""),
+                                            "persona": args.get("persona", "friend"),
+                                            "voiceName": default_voice,
+                                            "language": "en",
+                                            "dailyCheckInTime": "20:00",
+                                            "habits": habits,
                                         })
 
-                        # Handle transcriptions — always record, selectively forward
-                        input_tx = getattr(server_content, "input_transcription", None)
-                        if input_tx and input_tx.text:
-                            transcript.append({
-                                "role": "user",
-                                "text": input_tx.text,
-                                "source": "input_transcription",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            })
-                            await ws.send_json({
-                                "type": "transcript",
-                                "role": "user",
-                                "text": input_tx.text,
-                            })
+                                        await ws.send_json({"type": "onboarding_complete"})
+                                        await session.send(input=types.LiveClientToolResponse(
+                                            function_responses=[
+                                                types.FunctionResponse(id=fc.id, name=fc.name, response={"status": "saved", "message": "Onboarding data saved successfully."})
+                                            ]
+                                        ))
+                                continue
 
-                        output_tx = getattr(server_content, "output_transcription", None)
-                        if output_tx and output_tx.text:
-                            text = output_tx.text
-                            transcript.append({
-                                "role": "agent",
-                                "text": text,
-                                "source": "output_transcription",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            })
-                            # Only forward non-thinking text to frontend
-                            if not text.strip().startswith("**"):
-                                await ws.send_json({
-                                    "type": "transcript",
-                                    "role": "assistant",
-                                    "text": text,
-                                })
+                            if not sc:
+                                continue
+                            if sc.interrupted:
+                                await ws.send_json({"type": "interrupted"})
+                                continue
 
+                            model_turn = getattr(sc, "model_turn", None)
+                            if model_turn and model_turn.parts:
+                                for part in model_turn.parts:
+                                    if part.inline_data and part.inline_data.data:
+                                        await ws.send_json({"type": "audio", "data": base64.b64encode(part.inline_data.data).decode()})
+                                    if part.text:
+                                        transcript.append({"role": "agent", "text": part.text, "source": "model_turn", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                        if not part.text.strip().startswith("**"):
+                                            await ws.send_json({"type": "transcript", "role": "assistant", "text": part.text})
+
+                            input_tx = getattr(sc, "input_transcription", None)
+                            if input_tx and input_tx.text:
+                                transcript.append({"role": "user", "text": input_tx.text, "source": "input_transcription", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                await ws.send_json({"type": "transcript", "role": "user", "text": input_tx.text})
+
+                            output_tx = getattr(sc, "output_transcription", None)
+                            if output_tx and output_tx.text:
+                                transcript.append({"role": "agent", "text": output_tx.text, "source": "output_transcription", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                if not output_tx.text.strip().startswith("**"):
+                                    await ws.send_json({"type": "transcript", "role": "assistant", "text": output_tx.text})
+
+                        print(f"[ONBOARD] receive() ended after {gemini_msg_count} msgs — looping for next turn")
+                except WebSocketDisconnect:
+                    print("[ONBOARD] Client disconnected")
                 except Exception as e:
-                    logger.error("Gemini receive error: %s", e)
-                    await ws.send_json({"type": "error", "message": str(e)})
+                    print(f"[ONBOARD] !! Receive error: {e}")
+                    try:
+                        await ws.send_json({"type": "error", "message": str(e)})
+                    except Exception:
+                        pass
+
+            # Trigger greeting via session.send() (produces audio with this model)
+            print("[ONBOARD] Sending greeting trigger...")
+            await session.send(input="The user just connected. Introduce yourself warmly and start the onboarding conversation. Remember to wait for their responses before moving on.", end_of_turn=True)
+            print("[ONBOARD] Greeting sent!")
 
             # Run both directions concurrently
             await asyncio.gather(

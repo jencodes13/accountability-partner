@@ -7,7 +7,7 @@ import {
   updateUserProfile, getUserProfile, addHabit,
   HABIT_CATEGORIES, HABIT_CATEGORY_LABELS, HabitCategory, Persona,
 } from '@/lib/db';
-import { Mic, MicOff } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 
 // WebSocket connects directly to the backend (Next.js can't proxy WS)
 const BACKEND_WS_URL = process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000';
@@ -15,6 +15,7 @@ const BACKEND_WS_URL = process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost
 interface OnboardingData {
   agentName: string;
   persona: Persona;
+  voiceName: string;
   language: string;
   dailyCheckInTime: string;
   habits: {
@@ -23,6 +24,28 @@ interface OnboardingData {
     identityStatement: string;
   }[];
 }
+
+// Gemini Live API voices grouped by preference
+const VOICE_OPTIONS: { name: string; descriptor: string; gender: 'feminine' | 'masculine' }[] = [
+  { name: 'Aoede', descriptor: 'Bright, warm', gender: 'feminine' },
+  { name: 'Leda', descriptor: 'Gentle, calm', gender: 'feminine' },
+  { name: 'Sulafat', descriptor: 'Warm, supportive', gender: 'feminine' },
+  { name: 'Orus', descriptor: 'Firm, authoritative', gender: 'masculine' },
+  { name: 'Charon', descriptor: 'Informative, clear', gender: 'masculine' },
+  { name: 'Fenrir', descriptor: 'Excitable, energetic', gender: 'masculine' },
+];
+
+const GENDER_DEFAULT_VOICE: Record<string, string> = {
+  feminine: 'Aoede',
+  masculine: 'Orus',
+};
+
+// Default voice per persona (used when no explicit choice is made)
+const PERSONA_DEFAULT_VOICE: Record<Persona, string> = {
+  coach: 'Kore',
+  friend: 'Zephyr',
+  reflective: 'Puck',
+};
 
 // ─── Aurora Component ───
 // Wide aurora with multiple translucent layers that drift independently.
@@ -50,7 +73,7 @@ function Aurora({ state, audioLevel = 0 }: { state: 'idle' | 'listening' | 'spea
 
       // Config per state (base values)
       const baseConfig = {
-        idle: { outerScale: 1, midScale: 1, innerScale: 1, coreScale: 1 },
+        idle: { outerScale: 0.95, midScale: 0.95, innerScale: 0.95, coreScale: 0.95 },
         listening: { outerScale: 0.85, midScale: 0.88, innerScale: 0.9, coreScale: 1.05 },
         speaking: { outerScale: 1.15, midScale: 1.12, innerScale: 1.1, coreScale: 1.15 },
       };
@@ -71,12 +94,12 @@ function Aurora({ state, audioLevel = 0 }: { state: 'idle' | 'listening' | 'spea
       const outerBR = `${62 - shift * 0.3}% ${38 + shift * 0.3}% ${52 + shift * 0.2}% ${48 - shift * 0.2}% / ${48 + shift * 0.4}% ${62 - shift * 0.4}% ${38 + shift * 0.2}% ${52 - shift * 0.2}%`;
 
       // Opacity modulation
-      const outerOpacity = (state === 'speaking' ? 0.1 : 0.06) + level * 0.04;
-      const midOpacity = (state === 'speaking' ? 0.18 : state === 'listening' ? 0.08 : 0.12) + level * 0.06;
-      const innerOpacity = (state === 'speaking' ? 0.3 : state === 'listening' ? 0.18 : 0.22) + level * 0.08;
+      const outerOpacity = (state === 'speaking' ? 0.1 : state === 'listening' ? 0.06 : 0.02) + level * 0.04;
+      const midOpacity = (state === 'speaking' ? 0.18 : state === 'listening' ? 0.08 : 0.04) + level * 0.06;
+      const innerOpacity = (state === 'speaking' ? 0.3 : state === 'listening' ? 0.18 : 0.08) + level * 0.08;
 
       // Shadow modulation
-      const shadowIntensity = state === 'speaking' ? 0.45 : state === 'listening' ? 0.35 : 0.25;
+      const shadowIntensity = state === 'speaking' ? 0.45 : state === 'listening' ? 0.35 : 0.05;
       const shadowMod = shadowIntensity + level * 0.2;
       const shadowSpread = 40 + level * 30;
       const shadowSpread2 = 80 + level * 40;
@@ -118,7 +141,7 @@ function Aurora({ state, audioLevel = 0 }: { state: 'idle' | 'listening' | 'spea
     };
   }, [audioLevel, state]);
 
-  const speed = state === 'speaking' ? 0.6 : state === 'listening' ? 0.85 : 1;
+  const speed = state === 'speaking' ? 0.5 : state === 'listening' ? 0.65 : 2;
 
   return (
     <div ref={containerRef} className="relative mx-auto" style={{ width: 240, height: 240 }}>
@@ -296,6 +319,10 @@ const AURORA_KEYFRAMES = `
     from { transform: scaleY(1); }
     to { transform: scaleY(0.4); }
   }
+  @keyframes pttPulse {
+    0%, 100% { border-color: rgba(130, 184, 154, 0.5); }
+    50% { border-color: rgba(130, 184, 154, 0.2); }
+  }
 `;
 
 // ─── RMS calculation helper ───
@@ -319,8 +346,9 @@ export default function OnboardingPage() {
   // Voice state
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isTalking, setIsTalking] = useState(false);
   const [currentSpeaker, setCurrentSpeaker] = useState<'agent' | 'user' | null>(null);
+  const [conversationDone, setConversationDone] = useState(false);
 
   // Transcript accumulation state
   const [agentMessages, setAgentMessages] = useState<string[]>([]);
@@ -339,6 +367,7 @@ export default function OnboardingPage() {
   const [formData, setFormData] = useState<OnboardingData>({
     agentName: '',
     persona: 'friend',
+    voiceName: PERSONA_DEFAULT_VOICE['friend'],
     language: 'en',
     dailyCheckInTime: '20:00',
     habits: [],
@@ -347,15 +376,17 @@ export default function OnboardingPage() {
 
   // Refs
   const audioContextRef = useRef<AudioContext | null>(null);
+  const playbackContextRef = useRef<AudioContext | null>(null);
+  const playbackGainRef = useRef<GainNode | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
-  const isMicMutedRef = useRef(false);
+  const isTalkingRef = useRef(false);
   const agentAudioDecayRef = useRef<number>(0);
   const currentSpeakerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => { isMicMutedRef.current = isMicMuted; }, [isMicMuted]);
+  useEffect(() => { isTalkingRef.current = isTalking; }, [isTalking]);
 
   // Audio level animation loop — pushes combined level to React state at ~60fps
   useEffect(() => {
@@ -405,6 +436,10 @@ export default function OnboardingPage() {
       audioContextRef.current.close();
       audioContextRef.current = null;
     }
+    if (playbackContextRef.current && playbackContextRef.current.state !== 'closed') {
+      playbackContextRef.current.close();
+      playbackContextRef.current = null;
+    }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'end' }));
       wsRef.current.close();
@@ -420,11 +455,21 @@ export default function OnboardingPage() {
     return () => cleanup();
   }, [cleanup]);
 
+  // Auto-redirect to home 8 seconds after conversation completes
+  useEffect(() => {
+    if (!conversationDone) return;
+    const timer = setTimeout(() => {
+      cleanup();
+      router.push('/');
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [conversationDone, cleanup, router]);
+
   // ─── Audio Playback ───
 
   const playAudioChunk = (base64Audio: string) => {
-    if (!audioContextRef.current) return;
-    const ctx = audioContextRef.current;
+    if (!playbackContextRef.current) return;
+    const ctx = playbackContextRef.current;
     const binaryString = atob(base64Audio);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
@@ -446,7 +491,7 @@ export default function OnboardingPage() {
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(ctx.destination);
+      source.connect(playbackGainRef.current || ctx.destination);
       const currentTime = ctx.currentTime;
       if (nextPlayTimeRef.current < currentTime) {
         nextPlayTimeRef.current = currentTime;
@@ -463,7 +508,13 @@ export default function OnboardingPage() {
       const delayMs = Math.max(0, (chunkEndTime - ctx.currentTime) * 1000) + 300;
       currentSpeakerTimeoutRef.current = setTimeout(() => {
         // Only reset if still 'agent' (user might have started speaking)
-        setCurrentSpeaker(prev => prev === 'agent' ? null : prev);
+        setCurrentSpeaker(prev => {
+          if (prev === 'agent') {
+            setAgentHasSpoken(true);
+            return null;
+          }
+          return prev;
+        });
         agentAudioLevelRef.current = 0;
       }, delayMs);
     } catch (e) {
@@ -473,7 +524,36 @@ export default function OnboardingPage() {
 
   // ─── Transition: welcome → orb ───
 
+  const playChime = () => {
+    try {
+      const ctx = new AudioContext();
+      const now = ctx.currentTime;
+
+      // Soft two-note chime (C4 → E4) — warm, peaceful
+      const notes = [261.63, 329.63];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, now + i * 0.3);
+        gain.gain.linearRampToValueAtTime(0.06, now + i * 0.3 + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.3 + 1.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * 0.3);
+        osc.stop(now + i * 0.3 + 1.5);
+      });
+
+      // Clean up after sound finishes
+      setTimeout(() => ctx.close(), 3000);
+    } catch {
+      // Audio not available — silent fallback
+    }
+  };
+
   const handleGetStarted = () => {
+    playChime();
     setPhase('transitioning');
     setTimeout(() => setPhase('orb'), 1800);
   };
@@ -496,11 +576,14 @@ export default function OnboardingPage() {
       });
       mediaStreamRef.current = stream;
 
-      audioContextRef.current = new window.AudioContext();
-      nextPlayTimeRef.current = audioContextRef.current.currentTime;
+      audioContextRef.current = new window.AudioContext({ sampleRate: 16000 });
+      playbackContextRef.current = new window.AudioContext({ sampleRate: 24000 });
+      playbackGainRef.current = playbackContextRef.current.createGain();
+      playbackGainRef.current.connect(playbackContextRef.current.destination);
+      nextPlayTimeRef.current = playbackContextRef.current.currentTime;
 
       const source = audioContextRef.current.createMediaStreamSource(stream);
-      const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+      const processor = audioContextRef.current.createScriptProcessor(2048, 1, 1);
       processorRef.current = processor;
       source.connect(processor);
       processor.connect(audioContextRef.current.destination);
@@ -520,35 +603,25 @@ export default function OnboardingPage() {
             setPhase('listening');
 
             processor.onaudioprocess = (e) => {
-              if (isMicMutedRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+              if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
               const inputData = e.inputBuffer.getChannelData(0);
 
-              // Calculate user audio level (RMS)
+              // Calculate RMS for aurora visualization
               const rms = calculateRMS(inputData);
               const scaledLevel = Math.min(1, rms * 8);
               userAudioLevelRef.current = Math.max(userAudioLevelRef.current * 0.9, scaledLevel);
 
-              // Resample from native rate to 16000Hz
-              const nativeRate = audioContextRef.current!.sampleRate;
-              const targetRate = 16000;
-              const ratio = nativeRate / targetRate;
-              const targetLength = Math.floor(inputData.length / ratio);
-              const resampled = new Float32Array(targetLength);
-              for (let i = 0; i < targetLength; i++) {
-                resampled[i] = inputData[Math.floor(i * ratio)];
+              // Convert to PCM16 (already at 16kHz, no resampling needed)
+              const pcm16 = new Int16Array(inputData.length);
+              for (let i = 0; i < inputData.length; i++) {
+                pcm16[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
               }
-
-              // Convert to PCM16
-              const pcm16 = new Int16Array(resampled.length);
-              for (let i = 0; i < resampled.length; i++) {
-                pcm16[i] = Math.max(-32768, Math.min(32767, resampled[i] * 32768));
-              }
-
-              // Base64 encode (chunked to avoid stack overflow)
-              const bytes = new Uint8Array(pcm16.buffer);
+              const uint8 = new Uint8Array(pcm16.buffer);
               let binary = '';
-              for (let i = 0; i < bytes.length; i++) {
-                binary += String.fromCharCode(bytes[i]);
+              const chunkSize = 8192;
+              for (let offset = 0; offset < uint8.length; offset += chunkSize) {
+                const chunk = uint8.subarray(offset, Math.min(offset + chunkSize, uint8.length));
+                binary += String.fromCharCode.apply(null, Array.from(chunk));
               }
               const base64Data = btoa(binary);
               wsRef.current!.send(JSON.stringify({ type: 'audio', data: base64Data }));
@@ -561,10 +634,28 @@ export default function OnboardingPage() {
             break;
 
           case 'interrupted':
-            if (audioContextRef.current) {
-              nextPlayTimeRef.current = audioContextRef.current.currentTime;
+            // Kill all playing audio instantly by disconnecting the gain node
+            if (playbackGainRef.current && playbackContextRef.current) {
+              playbackGainRef.current.disconnect();
+              playbackGainRef.current = playbackContextRef.current.createGain();
+              playbackGainRef.current.connect(playbackContextRef.current.destination);
+              nextPlayTimeRef.current = playbackContextRef.current.currentTime;
             }
+            // Clear partial state — interrupted turn is void
             agentAudioLevelRef.current = 0;
+            setCurrentSpeaker(null);
+            setCurrentAgentText('');
+            break;
+
+          case 'turn_complete':
+            // Model finished speaking — switch to listening state
+            setCurrentSpeaker(null);
+            setAgentHasSpoken(true);
+            agentAudioLevelRef.current = 0;
+            if (currentSpeakerTimeoutRef.current) {
+              clearTimeout(currentSpeakerTimeoutRef.current);
+              currentSpeakerTimeoutRef.current = null;
+            }
             break;
 
           case 'transcript':
@@ -592,47 +683,38 @@ export default function OnboardingPage() {
               }
               lastTranscriptRoleRef.current = 'user';
               setCurrentSpeaker('user');
-              setLastUserText(msg.text);
+              setLastUserText(prev => {
+                // Accumulate user transcript fragments into full text
+                if (prev && lastTranscriptRoleRef.current === 'user') {
+                  return prev + ' ' + msg.text;
+                }
+                return msg.text;
+              });
             }
             break;
 
-          case 'onboarding_complete':
-            // Finalize any remaining agent text
-            setCurrentAgentText(prev => {
-              if (prev.trim()) {
-                setAgentMessages(msgs => [...msgs, prev.trim()]);
-              }
-              return '';
-            });
-            setFormData({
-              agentName: msg.agentName || '',
-              persona: msg.persona || 'friend',
-              language: msg.language || 'en',
-              dailyCheckInTime: msg.dailyCheckInTime || '20:00',
-              habits: (msg.habits || []).slice(0, 3).map((h: { category: string; label: string; identityStatement: string }) => ({
-                category: (HABIT_CATEGORIES as readonly string[]).includes(h.category) ? h.category as HabitCategory : 'exercise' as HabitCategory,
-                label: h.label || '',
-                identityStatement: h.identityStatement || '',
-              })),
-            });
-            cleanup();
-            setIsConnected(false);
-            setPhase('review');
+          case 'onboarding_complete': {
+            // Backend already saved to Firestore — just mark done
+            // Don't cleanup immediately — let the agent finish speaking
+            // Show a "Next" button so the user can proceed when ready
+            setConversationDone(true);
             break;
+          }
 
           case 'error':
             console.error('Onboarding error:', msg.message);
+            // If onboarding was already saved, go home. Otherwise show conversation done.
             cleanup();
             setIsConnected(false);
-            setPhase('review');
+            setConversationDone(true);
             break;
         }
       };
 
       ws.onclose = () => {
         if (phase === 'listening') {
-          setIsConnected(false);
-          setPhase('review');
+          // If conversation was completed, go home. Otherwise show Next button.
+          setConversationDone(true);
         }
       };
 
@@ -654,19 +736,35 @@ export default function OnboardingPage() {
   const finishVoice = () => {
     cleanup();
     setIsConnected(false);
-    setPhase('review');
+    // Go straight to home — backend already saved onboarding data
+    router.push('/');
   };
 
-  // ─── Mic Toggle ───
+  // ─── Push-to-Talk Toggle ───
 
-  const toggleMic = () => {
-    const newMuted = !isMicMuted;
-    setIsMicMuted(newMuted);
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = !newMuted;
-      });
+  const [lastResponseDone, setLastResponseDone] = useState(false);
+  const [agentHasSpoken, setAgentHasSpoken] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+
+  const toggleTalk = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (isTalking) {
+      setIsTalking(false);
+      setLastResponseDone(true);
+      wsRef.current.send(JSON.stringify({ type: 'speech_end' }));
+    } else {
+      setIsTalking(true);
+      setLastResponseDone(false);
+      wsRef.current.send(JSON.stringify({ type: 'speech_start' }));
     }
+  };
+
+  // Redo last response — re-open the mic so the user can re-record
+  const redoResponse = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    setLastResponseDone(false);
+    setIsTalking(true);
+    wsRef.current.send(JSON.stringify({ type: 'speech_start' }));
   };
 
   // ─── Save ───
@@ -680,6 +778,7 @@ export default function OnboardingPage() {
       await updateUserProfile(user.uid, {
         agentName: formData.agentName,
         persona: formData.persona,
+        voiceName: formData.voiceName,
         language: formData.language,
         dailyCheckInTime: formData.dailyCheckInTime,
         onboardingComplete: true,
@@ -821,7 +920,7 @@ export default function OnboardingPage() {
   if (phase === 'orb') {
     return (
       <div
-        className="min-h-screen flex flex-col items-center justify-center text-foreground px-6"
+        className="min-h-screen flex flex-col items-center text-foreground px-6"
         style={{
           background: 'linear-gradient(180deg, #1e2128 0%, #262b34 100%)',
           fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
@@ -829,9 +928,9 @@ export default function OnboardingPage() {
       >
         <style>{AURORA_KEYFRAMES}</style>
 
-        <div className="w-full max-w-[380px] text-center">
-          {/* Aurora */}
-          <div style={{ marginBottom: 40 }}>
+        <div className="w-full max-w-[380px] text-center" style={{ marginTop: 'calc(50vh - 200px)' }}>
+          {/* Aurora — same position as welcome visual */}
+          <div className="relative mx-auto mb-10" style={{ width: 240, height: 240 }}>
             <Aurora state="idle" audioLevel={0} />
           </div>
 
@@ -855,7 +954,7 @@ export default function OnboardingPage() {
               className="text-xs transition-opacity hover:opacity-80"
               style={{ color: '#7e8a96' }}
             >
-              Not now — schedule our first check-in
+              Not now — schedule onboarding for later
             </button>
           </div>
         </div>
@@ -887,122 +986,59 @@ export default function OnboardingPage() {
       >
         <style>{AURORA_KEYFRAMES}</style>
 
-        {/* Center: Aurora + status */}
+        {/* Center: Aurora + status — the orb IS the interface */}
         <div className="flex-1 flex flex-col items-center justify-center px-6">
           <div className="w-full max-w-[380px] text-center">
             <Aurora state={auroraState} audioLevel={audioLevel} />
 
             <p
               className="text-sm mt-8"
-              style={{ color: '#7e8a96' }}
+              style={{ color: '#7e8a96', minHeight: '1.5em' }}
             >
               {currentSpeaker === 'agent'
                 ? 'Speaking...'
-                : currentSpeaker === 'user'
-                  ? 'Listening...'
-                  : 'Listening...'
+                : 'Listening...'
               }
             </p>
+            {currentSpeaker === 'agent' && agentHasSpoken && (
+              <p
+                className="text-xs mt-3"
+                style={{ color: '#5a6370', fontStyle: 'italic' }}
+              >
+                Did I get something wrong? Feel free to correct me anytime.
+              </p>
+            )}
           </div>
         </div>
 
-        {/* Transcript area */}
-        <div className="mx-5 mb-4 max-w-[380px] self-center w-full" style={{ minHeight: 60 }}>
-          {/* Agent's message bubble — last complete question or in-progress text */}
-          {displayText && (
-            <div
-              className="rounded-2xl px-4 py-3 mb-2"
+        {/* Bottom: Next button (when done) or subtle End link */}
+        <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-2">
+          {conversationDone && currentSpeaker !== 'agent' ? (
+            <button
+              onClick={finishVoice}
+              className="min-w-[200px] flex items-center justify-center gap-2 rounded-full px-6 py-3.5 text-sm font-semibold transition-opacity hover:opacity-90"
               style={{
-                backgroundColor: '#2e3440',
-                border: '1px solid rgba(255,255,255,0.04)',
-                transition: 'opacity 0.2s ease',
+                backgroundColor: '#82b89a',
+                color: '#1e2128',
               }}
             >
-              <p
-                className="text-sm"
-                style={{
-                  color: isAgentSpeaking ? '#c8d0dc' : '#b0b8c4',
-                  lineHeight: 1.5,
-                  fontStyle: 'normal',
-                }}
-              >
-                {displayText}
-                {isAgentSpeaking && (
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      width: 4,
-                      height: 14,
-                      backgroundColor: '#82b89a',
-                      marginLeft: 2,
-                      verticalAlign: 'text-bottom',
-                      animation: 'cursorBlink 1s step-end infinite',
-                    }}
-                  />
-                )}
-              </p>
-            </div>
-          )}
-
-          {/* User's last spoken text — smaller, secondary */}
-          {lastUserText && (
-            <div
-              className="rounded-xl px-3 py-2 self-end"
-              style={{
-                backgroundColor: 'rgba(130, 184, 154, 0.08)',
-                border: '1px solid rgba(130, 184, 154, 0.12)',
-                marginLeft: 'auto',
-                maxWidth: '85%',
-                float: 'right',
-              }}
+              Next
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={finishVoice}
+              className="text-xs transition-opacity hover:opacity-80"
+              style={{ color: '#7e8a96' }}
             >
-              <p
-                className="text-xs"
-                style={{ color: '#82b89a', lineHeight: 1.4 }}
-              >
-                {lastUserText}
-              </p>
-            </div>
+              End
+            </button>
           )}
-          {lastUserText && <div style={{ clear: 'both' }} />}
         </div>
 
-        {/* Cursor blink keyframe */}
-        <style>{`
-          @keyframes cursorBlink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0; }
-          }
-        `}</style>
-
-        {/* Controls */}
-        <div className="flex items-center justify-center gap-4 px-6 pb-8 pt-2">
-          <button
-            onClick={toggleMic}
-            className="w-10 h-10 rounded-full flex items-center justify-center transition-all"
-            style={{
-              backgroundColor: isMicMuted ? 'rgba(239, 68, 68, 0.15)' : 'rgba(130, 184, 154, 0.08)',
-              border: '1px solid',
-              borderColor: isMicMuted ? 'rgba(239, 68, 68, 0.3)' : 'rgba(130, 184, 154, 0.15)',
-            }}
-          >
-            {isMicMuted
-              ? <MicOff className="w-4 h-4" style={{ color: '#ef4444' }} />
-              : <Mic className="w-4 h-4" style={{ color: '#82b89a' }} />
-            }
-          </button>
-
-          <button
-            onClick={finishVoice}
-            className="px-5 py-2.5 rounded-full text-xs font-medium transition-opacity hover:opacity-80"
-            style={{
-              backgroundColor: 'rgba(255,255,255,0.06)',
-              color: '#b0b8c4',
-              border: '1px solid rgba(255,255,255,0.08)',
-            }}
-          >
-            Done
-          </button>
+        {/* Hidden transcript area — kept for data accumulation but not displayed */}
+        <div style={{ display: 'none' }}>
+          {displayText && <span>{displayText}</span>}
         </div>
       </div>
     );
@@ -1089,6 +1125,53 @@ export default function OnboardingPage() {
               );
             })}
           </div>
+        </div>
+
+        {/* Voice */}
+        <div
+          className="rounded-2xl p-4 mb-3"
+          style={{ backgroundColor: '#2e3440', border: '1px solid rgba(255,255,255,0.04)' }}
+        >
+          <label className="block text-[11px] font-medium uppercase tracking-wide mb-3" style={{ color: '#7e8a96' }}>
+            Voice
+          </label>
+          {(['feminine', 'masculine'] as const).map(gender => (
+            <div key={gender} className="mb-3 last:mb-0">
+              <p className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: '#7e8a96' }}>
+                {gender}
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {VOICE_OPTIONS.filter(v => v.gender === gender).map(voice => {
+                  const selected = formData.voiceName === voice.name;
+                  return (
+                    <button
+                      key={voice.name}
+                      onClick={() => setFormData({ ...formData, voiceName: voice.name })}
+                      className="rounded-xl px-2.5 py-2 text-left transition-all"
+                      style={{
+                        backgroundColor: selected ? 'rgba(130, 184, 154, 0.12)' : 'rgba(255,255,255,0.02)',
+                        border: '1px solid',
+                        borderColor: selected ? 'rgba(130, 184, 154, 0.3)' : 'rgba(255,255,255,0.06)',
+                      }}
+                    >
+                      <span
+                        className="block text-xs font-medium"
+                        style={{ color: selected ? '#82b89a' : '#e2e0e6' }}
+                      >
+                        {voice.name}
+                      </span>
+                      <span
+                        className="block text-[10px] mt-0.5"
+                        style={{ color: selected ? 'rgba(130, 184, 154, 0.7)' : '#7e8a96' }}
+                      >
+                        {voice.descriptor}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Check-in time */}
