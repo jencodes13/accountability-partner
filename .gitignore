@@ -37,3 +37,4 @@ venv/
 *.log
 .superpowers/
 .vercel
+.claude/
