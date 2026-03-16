@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
-import { Mic, Camera } from 'lucide-react';
+import { Mic, Camera, LogOut } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { getAuth, signOut } from 'firebase/auth';
 import { getUserProfile, getHabits, Habit, UserProfile, HABIT_CATEGORY_LABELS, HabitCategory } from '@/lib/db';
 
 // WebSocket connects directly to the backend (Next.js can't proxy WS)
@@ -979,6 +980,14 @@ export default function CheckInPage() {
             >
               Start Check-in
             </button>
+            <button
+              onClick={() => signOut(getAuth())}
+              className="mt-4 text-xs transition-opacity hover:opacity-80 flex items-center gap-1 mx-auto"
+              style={{ color: '#7e8a96' }}
+            >
+              <LogOut className="w-3 h-3" />
+              Sign out
+            </button>
           </div>
         </div>
       )}
@@ -1055,13 +1064,23 @@ export default function CheckInPage() {
               style={{ display: 'none' }}
               onChange={handlePhotoCapture}
             />
-            <button
-              onClick={endSession}
-              className="text-xs transition-opacity hover:opacity-80"
-              style={{ color: '#7e8a96' }}
-            >
-              End session
-            </button>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={endSession}
+                className="text-xs transition-opacity hover:opacity-80"
+                style={{ color: '#7e8a96' }}
+              >
+                End session
+              </button>
+              <button
+                onClick={() => { cleanup(); signOut(getAuth()); }}
+                className="text-xs transition-opacity hover:opacity-80 flex items-center gap-1"
+                style={{ color: '#7e8a96' }}
+              >
+                <LogOut className="w-3 h-3" />
+                Sign out
+              </button>
+            </div>
           </div>
 
           {/* Hidden: transcript + habit pills kept for data accumulation */}

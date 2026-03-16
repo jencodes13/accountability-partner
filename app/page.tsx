@@ -157,9 +157,17 @@ export default function Home() {
         displayName: u.displayName || u.email?.split('@')[0] || '',
       });
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Authentication failed';
       console.error('Email auth error', error);
-      alert(message);
+      const code = (error as { code?: string })?.code || '';
+      if (code === 'auth/invalid-credential' || code === 'auth/user-not-found' || code === 'auth/wrong-password') {
+        alert('Account not found or wrong password. Tap "Create account" to sign up.');
+      } else if (code === 'auth/email-already-in-use') {
+        alert('This email is already registered. Try signing in instead.');
+      } else if (code === 'auth/weak-password') {
+        alert('Password must be at least 6 characters.');
+      } else {
+        alert(error instanceof Error ? error.message : 'Authentication failed');
+      }
     }
   };
 
