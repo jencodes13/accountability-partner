@@ -344,7 +344,7 @@ async def voice_session(ws: WebSocket, user_id: str):
 
                 print(f"[SESSION] Extracting structured data from transcript ({len(transcript)} entries)...")
                 extraction_response = extraction_client.models.generate_content(
-                    model="gemini-2.5-flash-preview-05-20",
+                    model="gemini-2.0-flash",
                     contents=extraction_prompt,
                 )
 
