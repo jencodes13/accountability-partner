@@ -156,12 +156,19 @@ Sam, etc. Pay close attention to spelling variations.
 
 EXTRACTION_PROMPT_TEMPLATE = """Extract the following from this onboarding conversation transcript. Return ONLY valid JSON, nothing else.
 
+IMPORTANT: If the user corrected their name at any point in the conversation (e.g., "actually it's Jennie" or "my name is Jen, not Jenny"), use the CORRECTED version — the last name they confirmed.
+
+For habits, use these exact category values: alcohol, sports-betting, nutrition, exercise, spending, journaling, screen-time, sleep, workouts-steps.
+For label, use a short natural description like "Healthier eating", "Better sleep", "Managing alcohol consumption", "Regular exercise", "Daily journaling".
+NEVER use the word "Sobriety" as a label — use "Managing alcohol consumption" or "Drinking less" instead.
+
 {{
-  "agentName": "the name the user chose for their partner",
-  "persona": "coach or friend or reflective based on their style preference",
+  "userName": "the user's name (use the LAST corrected version)",
+  "agentName": "the name the user chose for their accountability partner",
+  "persona": "coach or friend or reflective based on their style preference (direct=coach, encouraging=friend, questions=reflective)",
   "voicePreference": "masculine or feminine",
   "habits": [
-    {{"category": "one of: alcohol, sports-betting, nutrition, exercise, spending, journaling, screen-time, sleep, workouts-steps", "label": "short goal description"}}
+    {{"category": "exact category from the list above", "label": "short goal description"}}
   ]
 }}
 
@@ -276,15 +283,19 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                                         {"category": h.get("category", "exercise"), "label": h.get("label", ""), "identityStatement": ""}
                                         for h in extracted.get("habits", [])
                                     ]
-                                    await complete_onboarding(user_id, {
+                                    save_data = {
                                         "agentName": extracted.get("agentName", "Partner"),
                                         "persona": extracted.get("persona", "friend"),
                                         "voiceName": default_voice,
                                         "language": "en",
                                         "dailyCheckInTime": "20:00",
                                         "habits": habits_data,
-                                    })
-                                    print(f"[ONBOARD] SAVED: {extracted.get('agentName')}, {len(habits_data)} habits")
+                                    }
+                                    user_name = extracted.get("userName")
+                                    if user_name:
+                                        save_data["displayName"] = user_name
+                                    await complete_onboarding(user_id, save_data)
+                                    print(f"[ONBOARD] SAVED: name={user_name}, agent={extracted.get('agentName')}, {len(habits_data)} habits")
                                     await ws.send_json({"type": "onboarding_complete"})
                                 else:
                                     print("[ONBOARD] No transcript — saving with defaults")
@@ -532,16 +543,20 @@ async def extract_onboarding(user_id: str, data: TranscriptData):
             for h in extracted.get("habits", [])
         ]
 
-        await complete_onboarding(user_id, {
+        save_data = {
             "agentName": extracted.get("agentName", "Partner"),
             "persona": extracted.get("persona", "friend"),
             "voiceName": default_voice,
             "language": "en",
             "dailyCheckInTime": "20:00",
             "habits": habits_data,
-        })
+        }
+        user_name = extracted.get("userName")
+        if user_name:
+            save_data["displayName"] = user_name
+        await complete_onboarding(user_id, save_data)
 
-        print(f"[ONBOARD REST] SAVED: {extracted.get('agentName')}, {len(habits_data)} habits")
+        print(f"[ONBOARD REST] SAVED: name={user_name}, agent={extracted.get('agentName')}, {len(habits_data)} habits")
         return {"status": "saved", "extracted": extracted}
 
     except Exception as e:

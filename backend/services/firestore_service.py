@@ -23,7 +23,7 @@ async def update_user_profile(user_id: str, data: dict):
 async def complete_onboarding(user_id: str, data: dict):
     """Save onboarding results: agentName, persona, habits, language, checkInTime."""
     db = get_db()
-    db.collection("users").document(user_id).update({
+    update_data = {
         "agentName": data["agentName"],
         "persona": data["persona"],
         "voiceName": data.get("voiceName", "Aoede"),
@@ -31,7 +31,11 @@ async def complete_onboarding(user_id: str, data: dict):
         "dailyCheckInTime": data.get("dailyCheckInTime", "20:00"),
         "onboardingComplete": True,
         "updatedAt": datetime.now(timezone.utc),
-    })
+    }
+    # Save user's corrected name if provided
+    if data.get("displayName"):
+        update_data["displayName"] = data["displayName"]
+    db.collection("users").document(user_id).update(update_data)
 
     # Create habits
     for habit in data.get("habits", []):

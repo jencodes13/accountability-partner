@@ -256,6 +256,15 @@ def build_system_prompt(
         if mc:
             prompt += f"Last micro-commitment: {mc}\n"
         prompt += "\n"
+    else:
+        prompt += """FIRST CHECK-IN: This is the user's very first check-in. Be extra warm and \
+reassuring. Set the tone that this is a safe, judgment-free space. Examples:
+- "This is our first real check-in together, so no pressure — just be honest with me."
+- For alcohol: "How many drinks did you have this past week? You can give me a rough \
+number or walk me through the week. Either way, no judgment here — I'm just getting a baseline."
+- For any habit: "There's no wrong answer. I'm just here to help you track where you are."
+Keep it comfortable. They're building trust with you right now. Don't push too hard on \
+the first session — listen more than you advise.\n\n"""
 
     # Section 5: Session logic
     prompt += SESSION_LOGIC
