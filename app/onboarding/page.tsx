@@ -354,6 +354,8 @@ export default function OnboardingPage() {
   const [agentMessages, setAgentMessages] = useState<string[]>([]);
   const [currentAgentText, setCurrentAgentText] = useState('');
   const [lastUserText, setLastUserText] = useState('');
+  // Full transcript for extraction
+  const fullTranscriptRef = useRef<{ role: string; text: string }[]>([]);
   // Track which role last sent a transcript to detect role switches
   const lastTranscriptRoleRef = useRef<'assistant' | 'user' | null>(null);
 
@@ -643,6 +645,7 @@ export default function OnboardingPage() {
             // Model finished speaking — switch to listening state
             setCurrentSpeaker(null);
             setAgentHasSpoken(true);
+            setAgentTurnCount(c => c + 1);
             agentAudioLevelRef.current = 0;
             if (currentSpeakerTimeoutRef.current) {
               clearTimeout(currentSpeakerTimeoutRef.current);
@@ -651,6 +654,9 @@ export default function OnboardingPage() {
             break;
 
           case 'transcript':
+            // Accumulate full transcript for extraction
+            fullTranscriptRef.current.push({ role: msg.role === 'assistant' ? 'agent' : 'user', text: msg.text });
+
             if (msg.role === 'assistant') {
               setCurrentSpeaker('agent');
               // If previous transcript was from user, finalize current agent text first
@@ -686,10 +692,10 @@ export default function OnboardingPage() {
             break;
 
           case 'onboarding_complete': {
-            // Backend already saved to Firestore — just mark done
-            // Don't cleanup immediately — let the agent finish speaking
-            // Show a "Next" button so the user can proceed when ready
-            setConversationDone(true);
+            // Backend saved to Firestore — go home immediately
+            console.log('Onboarding saved! Redirecting...');
+            cleanup();
+            router.push('/');
             break;
           }
 
@@ -700,29 +706,15 @@ export default function OnboardingPage() {
         }
       };
 
-      // Soft close: wait for audio buffer to drain before showing Next
-      const softClose = () => {
-        const ctx = playbackContextRef.current;
-        if (ctx && nextPlayTimeRef.current > ctx.currentTime) {
-          // Audio still queued — wait for it to finish
-          const remainingMs = (nextPlayTimeRef.current - ctx.currentTime) * 1000 + 800;
-          setTimeout(() => {
-            setConversationDone(true);
-            setCurrentSpeaker(null);
-          }, remainingMs);
-        } else {
-          // No audio queued — show Next after a brief pause
-          setTimeout(() => {
-            setConversationDone(true);
-            setCurrentSpeaker(null);
-          }, 500);
-        }
+      ws.onclose = () => {
+        // Don't navigate — wait for onboarding_complete or finishVoice fallback
+        setCurrentSpeaker(null);
+        setConversationDone(true);
       };
-
-      ws.onclose = () => softClose();
       ws.onerror = (e) => {
         console.error('WebSocket error:', e);
-        softClose();
+        setCurrentSpeaker(null);
+        setConversationDone(true);
       };
     } catch (error) {
       console.error('Error starting onboarding voice:', error);
@@ -733,10 +725,53 @@ export default function OnboardingPage() {
 
   // ─── End voice → review ───
 
-  const finishVoice = () => {
+  const [isSavingSetup, setIsSavingSetup] = useState(false);
+
+  const finishVoice = async () => {
+    if (!user) return;
+    setIsSavingSetup(true);
+
+    // Save onboardingComplete directly to Firestore — bypass wrapper
+    try {
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('@/lib/firebase');
+      await updateDoc(doc(db, 'users', user.uid), { onboardingComplete: true });
+      console.log('SUCCESS: onboardingComplete saved to Firestore');
+    } catch (e) {
+      console.error('FAILED to save onboardingComplete:', e);
+      // Try setDoc as fallback (in case doc doesn't exist)
+      try {
+        const { doc, setDoc } = await import('firebase/firestore');
+        const { db } = await import('@/lib/firebase');
+        await setDoc(doc(db, 'users', user.uid), { onboardingComplete: true }, { merge: true });
+        console.log('SUCCESS (fallback): onboardingComplete saved via setDoc');
+      } catch (e2) {
+        console.error('BOTH saves failed:', e2);
+      }
+    }
+
+    // Send transcript to REST endpoint for extraction (reliable HTTP, not WebSocket)
+    const transcriptText = fullTranscriptRef.current
+      .map(t => `${t.role}: ${t.text}`)
+      .join('\n');
+
+    if (transcriptText.trim()) {
+      try {
+        const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000').replace('wss://', 'https://').replace('ws://', 'http://');
+        console.log(`Sending transcript (${transcriptText.length} chars) to backend for extraction...`);
+        const res = await fetch(`${backendUrl}/api/onboarding/${user.uid}/extract`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript: transcriptText }),
+        });
+        const result = await res.json();
+        console.log('Extraction result:', result);
+      } catch (e) {
+        console.error('Extraction request failed:', e);
+      }
+    }
+
     cleanup();
-    setIsConnected(false);
-    // Go straight to home — backend already saved onboarding data
     router.push('/');
   };
 
@@ -744,6 +779,7 @@ export default function OnboardingPage() {
 
   const [lastResponseDone, setLastResponseDone] = useState(false);
   const [agentHasSpoken, setAgentHasSpoken] = useState(false);
+  const [agentTurnCount, setAgentTurnCount] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
 
   const toggleTalk = () => {
@@ -828,6 +864,32 @@ export default function OnboardingPage() {
   // ═══════════════════════════════════════════════════
   // WELCOME — Bold statement + "Get started"
   // ═══════════════════════════════════════════════════
+
+  // ─── Saving setup screen ───
+  if (isSavingSetup) {
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center text-foreground px-6"
+        style={{
+          background: 'linear-gradient(180deg, #1e2128 0%, #262b34 100%)',
+          fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+        }}
+      >
+        <div className="flex flex-col items-center gap-4">
+          <div
+            className="w-12 h-12 rounded-full animate-pulse"
+            style={{ backgroundColor: 'rgba(130, 184, 154, 0.3)' }}
+          />
+          <p className="text-lg font-medium" style={{ color: '#e2e0e6' }}>
+            Saving your setup...
+          </p>
+          <p className="text-sm" style={{ color: '#7e8a96' }}>
+            Getting everything ready for your first check-in
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (phase === 'welcome' || phase === 'transitioning') {
     const fading = phase === 'transitioning';
@@ -1014,6 +1076,21 @@ export default function OnboardingPage() {
         {/* Bottom: Next button (when done) or subtle End link */}
         <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-2">
           {conversationDone && currentSpeaker !== 'agent' ? (
+            <div className="flex flex-col items-center gap-2">
+              <p className="text-sm" style={{ color: '#82b89a' }}>Wrapping up...</p>
+              <button
+                onClick={() => { cleanup(); router.push('/'); }}
+                className="min-w-[200px] flex items-center justify-center gap-2 rounded-full px-6 py-3.5 text-sm font-semibold transition-opacity hover:opacity-90"
+                style={{
+                  backgroundColor: '#82b89a',
+                  color: '#1e2128',
+                }}
+              >
+                Continue
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          ) : agentTurnCount >= 8 ? (
             <button
               onClick={finishVoice}
               className="min-w-[200px] flex items-center justify-center gap-2 rounded-full px-6 py-3.5 text-sm font-semibold transition-opacity hover:opacity-90"
@@ -1022,18 +1099,10 @@ export default function OnboardingPage() {
                 color: '#1e2128',
               }}
             >
-              Next
+              Finish & Save
               <ArrowRight className="w-4 h-4" />
             </button>
-          ) : (
-            <button
-              onClick={finishVoice}
-              className="text-xs transition-opacity hover:opacity-80"
-              style={{ color: '#7e8a96' }}
-            >
-              End
-            </button>
-          )}
+          ) : null}
         </div>
 
         {/* Hidden transcript area — kept for data accumulation but not displayed */}

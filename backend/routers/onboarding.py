@@ -36,6 +36,15 @@ ONBOARDING_PROMPT = """You are a warm, friendly onboarding guide for an accounta
 Your job is to have a short, natural voice conversation to learn about the user and set up their \
 accountability partner. Keep it brisk — 3 to 4 minutes max.
 
+You are collecting this information through natural conversation (DO NOT mention this schema):
+- Their name
+- Up to 3 habits they want to track (categories: alcohol, sports-betting, nutrition, exercise, \
+spending, journaling, screen-time, sleep, workouts-steps)
+- A short goal label for each habit
+- Their preferred coaching style: coach (direct), friend (encouraging), or reflective (curious)
+- Whether they prefer a masculine or feminine voice for check-ins
+- What they want to call their accountability partner
+
 OPENING: Start with exactly this: "Hey, it's great to meet you. I'm here to be your \
 accountability partner. What's your name?" Wait for them to respond with their name. \
 Then say: "Great to meet you, [name]. I can help with things like exercise, nutrition, \
@@ -85,7 +94,9 @@ support — something natural like "And just so you know, I'm a great tool to ke
 on track, but I always recommend working with a professional too if you need one." \
 Then close warmly: "I'm excited to help you, [user name]. I'll see you at your first \
 check-in!" Keep the whole wrap-up to 2-3 sentences. Say your closing message naturally \
-and end the conversation — the system will handle saving everything automatically.
+and end the conversation — the system will handle saving everything automatically. \
+IMPORTANT: Do NOT call any tools or functions. Just have the conversation naturally. \
+The system saves everything from the transcript automatically.
 
 RESPONSE QUALITY:
 - NEVER respond with generic filler like "That's great" or "Awesome, thanks for sharing." \
@@ -237,7 +248,73 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                             except Exception as e:
                                 print(f"[ONBOARD] !! Failed to send audio_stream_end: {e}")
                         elif msg["type"] == "end":
-                            logger.info(">> Client sent 'end' signal")
+                            print("[ONBOARD] >> End signal — extracting from transcript NOW")
+                            # Extract IMMEDIATELY while WebSocket is still open
+                            try:
+                                extraction_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                                transcript_text = "\n".join([
+                                    f"{t['role']}: {t['text']}"
+                                    for t in transcript
+                                    if t.get('text') and t['role'] in ('user', 'agent')
+                                ])
+                                if transcript_text.strip():
+                                    extraction_prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript_text=transcript_text)
+                                    print(f"[ONBOARD] Extracting from {len(transcript)} entries...")
+                                    extraction_response = extraction_client.models.generate_content(
+                                        model="gemini-2.5-flash-preview-05-20",
+                                        contents=extraction_prompt,
+                                    )
+                                    response_text = extraction_response.text.strip()
+                                    if response_text.startswith('```'):
+                                        response_text = response_text.split('\n', 1)[1]
+                                        response_text = response_text.rsplit('```', 1)[0]
+                                    extracted = json.loads(response_text)
+                                    voice_pref = extracted.get("voicePreference", "feminine")
+                                    voice_map = {"masculine": "Orus", "feminine": "Aoede"}
+                                    default_voice = voice_map.get(voice_pref, "Aoede")
+                                    habits_data = [
+                                        {"category": h.get("category", "exercise"), "label": h.get("label", ""), "identityStatement": ""}
+                                        for h in extracted.get("habits", [])
+                                    ]
+                                    await complete_onboarding(user_id, {
+                                        "agentName": extracted.get("agentName", "Partner"),
+                                        "persona": extracted.get("persona", "friend"),
+                                        "voiceName": default_voice,
+                                        "language": "en",
+                                        "dailyCheckInTime": "20:00",
+                                        "habits": habits_data,
+                                    })
+                                    print(f"[ONBOARD] SAVED: {extracted.get('agentName')}, {len(habits_data)} habits")
+                                    await ws.send_json({"type": "onboarding_complete"})
+                                else:
+                                    print("[ONBOARD] No transcript — saving with defaults")
+                                    await complete_onboarding(user_id, {
+                                        "agentName": "Partner",
+                                        "persona": "friend",
+                                        "voiceName": "Aoede",
+                                        "language": "en",
+                                        "dailyCheckInTime": "20:00",
+                                        "habits": [],
+                                    })
+                                    await ws.send_json({"type": "onboarding_complete"})
+                            except Exception as e:
+                                print(f"[ONBOARD] !! Extraction failed: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                # FALLBACK: save with defaults so user never gets stuck
+                                try:
+                                    await complete_onboarding(user_id, {
+                                        "agentName": "Partner",
+                                        "persona": "friend",
+                                        "voiceName": "Aoede",
+                                        "language": "en",
+                                        "dailyCheckInTime": "20:00",
+                                        "habits": [],
+                                    })
+                                    print("[ONBOARD] Saved with defaults (fallback)")
+                                    await ws.send_json({"type": "onboarding_complete"})
+                                except Exception:
+                                    pass
                             break
                 except WebSocketDisconnect:
                     logger.info(">> Client WebSocket disconnected")
@@ -261,6 +338,13 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                             # Forward turn_complete to frontend
                             if tc:
                                 await ws.send_json({"type": "turn_complete"})
+
+                            # If model tries to call a tool, just log and ignore
+                            # (tool calls crash native audio model with 1008)
+                            tool_call = getattr(message, "tool_call", None)
+                            if tool_call:
+                                print(f"[ONBOARD] Tool call received (ignoring): {tool_call}")
+                                continue
 
                             if not sc:
                                 continue
@@ -414,6 +498,57 @@ async def save_onboarding(user_id: str, data: OnboardingData):
     """Save onboarding results from voice conversation review form."""
     await complete_onboarding(user_id, data.model_dump())
     return {"status": "onboarding_complete"}
+
+
+class TranscriptData(BaseModel):
+    transcript: str
+
+
+@router.post("/{user_id}/extract")
+async def extract_onboarding(user_id: str, data: TranscriptData):
+    """Extract structured data from conversation transcript and save."""
+    try:
+        extraction_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        extraction_prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript_text=data.transcript)
+        print(f"[ONBOARD REST] Extracting for {user_id} ({len(data.transcript)} chars)...")
+
+        extraction_response = extraction_client.models.generate_content(
+            model="gemini-2.5-flash-preview-05-20",
+            contents=extraction_prompt,
+        )
+
+        response_text = extraction_response.text.strip()
+        if response_text.startswith('```'):
+            response_text = response_text.split('\n', 1)[1]
+            response_text = response_text.rsplit('```', 1)[0]
+
+        extracted = json.loads(response_text)
+        voice_pref = extracted.get("voicePreference", "feminine")
+        voice_map = {"masculine": "Orus", "feminine": "Aoede"}
+        default_voice = voice_map.get(voice_pref, "Aoede")
+
+        habits_data = [
+            {"category": h.get("category", "exercise"), "label": h.get("label", ""), "identityStatement": ""}
+            for h in extracted.get("habits", [])
+        ]
+
+        await complete_onboarding(user_id, {
+            "agentName": extracted.get("agentName", "Partner"),
+            "persona": extracted.get("persona", "friend"),
+            "voiceName": default_voice,
+            "language": "en",
+            "dailyCheckInTime": "20:00",
+            "habits": habits_data,
+        })
+
+        print(f"[ONBOARD REST] SAVED: {extracted.get('agentName')}, {len(habits_data)} habits")
+        return {"status": "saved", "extracted": extracted}
+
+    except Exception as e:
+        print(f"[ONBOARD REST] !! Failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
 
 
 @router.get("/{user_id}/status")
