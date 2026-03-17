@@ -313,11 +313,7 @@ async def voice_session(ws: WebSocket, user_id: str):
                                         })
                                         for habit_id, outcome in streak_updates.items():
                                             update_streak(user_id, habit_id, outcome)
-                                        await session.send(input=types.LiveClientToolResponse(
-                                            function_responses=[
-                                                types.FunctionResponse(id=fc.id, name=fc.name, response={"status": "saved", "sessionId": saved_session_id})
-                                            ]
-                                        ))
+                                        # Don't send tool response — causes 1008 on this model
                                         await ws.send_json({
                                             "type": "session_summary", "sessionId": saved_session_id,
                                             "habitsCovered": habits_covered,

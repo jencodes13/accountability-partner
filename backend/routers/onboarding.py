@@ -359,11 +359,8 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                                         })
 
                                         await ws.send_json({"type": "onboarding_complete"})
-                                        await session.send(input=types.LiveClientToolResponse(
-                                            function_responses=[
-                                                types.FunctionResponse(id=fc.id, name=fc.name, response={"status": "saved", "message": "Onboarding data saved successfully."})
-                                            ]
-                                        ))
+                                        # Don't send tool response — it causes 1008 on this model
+                                        # The save is already done, session can end
                                 continue
 
                             if not sc:
