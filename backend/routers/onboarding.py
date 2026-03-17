@@ -165,8 +165,7 @@ ONBOARDING_TOOL = types.Tool(
                     ),
                     "persona": types.Schema(
                         type="STRING",
-                        description="The feedback lean: coach (direct), friend (encouraging), or reflective (questions)",
-                        enum=["coach", "friend", "reflective"],
+                        description="The feedback lean: coach or friend or reflective",
                     ),
                     "voicePreference": types.Schema(
                         type="STRING",
@@ -174,11 +173,7 @@ ONBOARDING_TOOL = types.Tool(
                     ),
                     "habit1_category": types.Schema(
                         type="STRING",
-                        description="Category for habit 1",
-                        enum=[
-                            "alcohol", "sports-betting", "nutrition", "exercise",
-                            "spending", "journaling", "screen-time", "sleep", "workouts-steps",
-                        ],
+                        description="Category for habit 1. Must be one of: alcohol, sports-betting, nutrition, exercise, spending, journaling, screen-time, sleep, workouts-steps",
                     ),
                     "habit1_label": types.Schema(
                         type="STRING",
