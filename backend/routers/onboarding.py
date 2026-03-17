@@ -261,7 +261,7 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                                     extraction_prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript_text=transcript_text)
                                     print(f"[ONBOARD] Extracting from {len(transcript)} entries...")
                                     extraction_response = extraction_client.models.generate_content(
-                                        model="gemini-2.0-flash",
+                                        model="gemini-2.5-flash",
                                         contents=extraction_prompt,
                                     )
                                     response_text = extraction_response.text.strip()
@@ -425,7 +425,7 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
 
                 print(f"[ONBOARD] Extracting structured data from transcript ({len(transcript)} entries)...")
                 extraction_response = extraction_client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=extraction_prompt,
                 )
 
@@ -513,7 +513,7 @@ async def extract_onboarding(user_id: str, data: TranscriptData):
         print(f"[ONBOARD REST] Extracting for {user_id} ({len(data.transcript)} chars)...")
 
         extraction_response = extraction_client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=extraction_prompt,
         )
 
