@@ -455,15 +455,7 @@ export default function OnboardingPage() {
     return () => cleanup();
   }, [cleanup]);
 
-  // Auto-redirect to home 8 seconds after conversation completes
-  useEffect(() => {
-    if (!conversationDone) return;
-    const timer = setTimeout(() => {
-      cleanup();
-      router.push('/');
-    }, 8000);
-    return () => clearTimeout(timer);
-  }, [conversationDone, cleanup, router]);
+  // When conversation is done, user taps "Next" to proceed (no auto-redirect)
 
   // ─── Audio Playback ───
 
@@ -712,10 +704,8 @@ export default function OnboardingPage() {
       };
 
       ws.onclose = () => {
-        if (phase === 'listening') {
-          // If conversation was completed, go home. Otherwise show Next button.
-          setConversationDone(true);
-        }
+        // Only mark done if onboarding was actually saved (tool call happened)
+        // Otherwise just stay on the listening phase — user can tap End
       };
 
       ws.onerror = (e) => {

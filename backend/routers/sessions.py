@@ -155,7 +155,7 @@ async def voice_session(ws: WebSocket, user_id: str):
                     start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                     prefix_padding_ms=20,
-                    silence_duration_ms=700,
+                    silence_duration_ms=400,
                 )
             ),
         )

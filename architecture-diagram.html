@@ -109,7 +109,11 @@
   }
   .badge-blue { background: #e8f0fe; color: #1967d2; }
   .badge-green { background: #e6f4ea; color: #137333; }
-  .badge-gcp { background: #34a853; color: #fff; font-size: 9px; letter-spacing: 0.5px; }
+  .badge-gcp {
+    background: #fff; color: #5f6368; font-size: 9px; letter-spacing: 0.5px;
+    border: 1px solid #dadce0; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .gcp-logo { display: inline-block; width: 16px; height: 14px; vertical-align: middle; }
 
   /* ===== ICON CIRCLES ===== */
   .icon-circle {
@@ -291,7 +295,7 @@
       <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" fill="#34a853"/>
     </svg>
     <span>AGENT RUNTIME</span>
-    <span class="badge badge-gcp">Google Cloud</span>
+    <span class="badge badge-gcp"><svg class="gcp-logo" viewBox="0 0 24 20" fill="none"><path d="M12 2L3 7v6l9 5 9-5V7l-9-5z" fill="#4285f4" opacity="0.9"/><path d="M12 2L3 7l9 5 9-5-9-5z" fill="#4285f4"/><path d="M3 7v6l9 5v-6L3 7z" fill="#34a853"/><path d="M21 7v6l-9 5v-6l9-5z" fill="#fbbc04"/><path d="M12 12l-9-5 9-5 9 5-9 5z" fill="#ea4335" opacity="0.3"/></svg>Google Cloud</span>
   </div>
   <div style="display: flex; justify-content: center;">
     <div class="box" style="min-width: 560px; border: 2px solid #34a853; box-shadow: 0 2px 8px rgba(52,168,83,0.15), 0 1px 3px rgba(60,64,67,0.1);">
@@ -302,7 +306,7 @@
           </svg>
         </div>
         <div>
-          <div class="box-title">Voice Agent <span class="badge badge-green">Google Cloud Run</span></div>
+          <div class="box-title">Voice Agent <span class="badge badge-gcp"><svg class="gcp-logo" viewBox="0 0 24 20" fill="none"><path d="M12 2L3 7v6l9 5 9-5V7l-9-5z" fill="#4285f4" opacity="0.9"/><path d="M12 2L3 7l9 5 9-5-9-5z" fill="#4285f4"/><path d="M3 7v6l9 5v-6L3 7z" fill="#34a853"/><path d="M21 7v6l-9 5v-6l9-5z" fill="#fbbc04"/><path d="M12 12l-9-5 9-5 9 5-9 5z" fill="#ea4335" opacity="0.3"/></svg>Cloud Run</span></div>
           <div class="box-sub">FastAPI + Google GenAI SDK + ADK</div>
         </div>
       </div>
@@ -397,7 +401,7 @@
     </div>
 
     <div style="text-align: right; margin-top: 12px;">
-      <span class="badge badge-gcp">Google Cloud</span>
+      <span class="badge badge-gcp"><svg class="gcp-logo" viewBox="0 0 24 20" fill="none"><path d="M12 2L3 7v6l9 5 9-5V7l-9-5z" fill="#4285f4" opacity="0.9"/><path d="M12 2L3 7l9 5 9-5-9-5z" fill="#4285f4"/><path d="M3 7v6l9 5v-6L3 7z" fill="#34a853"/><path d="M21 7v6l-9 5v-6l9-5z" fill="#fbbc04"/><path d="M12 12l-9-5 9-5 9 5-9 5z" fill="#ea4335" opacity="0.3"/></svg>Google Cloud</span>
     </div>
   </div>
 
@@ -462,7 +466,7 @@
     </div>
 
     <div style="text-align: right; margin-top: 12px;">
-      <span class="badge badge-gcp">Google Cloud</span>
+      <span class="badge badge-gcp"><svg class="gcp-logo" viewBox="0 0 24 20" fill="none"><path d="M12 2L3 7v6l9 5 9-5V7l-9-5z" fill="#4285f4" opacity="0.9"/><path d="M12 2L3 7l9 5 9-5-9-5z" fill="#4285f4"/><path d="M3 7v6l9 5v-6L3 7z" fill="#34a853"/><path d="M21 7v6l-9 5v-6l9-5z" fill="#fbbc04"/><path d="M12 12l-9-5 9-5 9 5-9 5z" fill="#ea4335" opacity="0.3"/></svg>Google Cloud</span>
     </div>
   </div>
 

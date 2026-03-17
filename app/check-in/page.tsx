@@ -291,7 +291,9 @@ export default function CheckInPage() {
 
   // Photo state
   const [photoSent, setPhotoSent] = useState(false);
+  const [showPhotoMenu, setShowPhotoMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   // Debrief state
   const [sessionEnded, setSessionEnded] = useState(false);
@@ -689,7 +691,12 @@ export default function CheckInPage() {
 
   // ─── Loading / Auth Guard ───
 
-  if (loading || !user || !profileChecked) {
+  if (!loading && !user) {
+    router.push('/');
+    return null;
+  }
+
+  if (loading || !profileChecked) {
     return (
       <div
         className="min-h-screen flex items-center justify-center"
@@ -806,113 +813,38 @@ export default function CheckInPage() {
             }
           </p>
 
-          {/* Habit pills */}
+          {/* Habits addressed */}
           {habits.length > 0 && (
-            <div className="flex flex-wrap justify-center gap-2 mb-8">
+            <div className="w-full space-y-2 mb-8">
               {habits.map(habit => {
                 const isCovered = debriefData.habitsCovered.includes(habit.id);
                 return (
                   <div
                     key={habit.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
-                    style={{
-                      backgroundColor: isCovered ? 'rgba(130, 184, 154, 0.15)' : 'rgba(255,255,255,0.04)',
-                      color: isCovered ? '#82b89a' : '#7e8a96',
-                      border: '1px solid',
-                      borderColor: isCovered ? 'rgba(130, 184, 154, 0.3)' : 'rgba(255,255,255,0.08)',
-                    }}
-                  >
-                    <span>{isCovered ? '\u2713' : '\u2014'}</span>
-                    <span>{getHabitShortLabel(habit)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Commitments card */}
-          {debriefData.commitments.length > 0 && (
-            <div
-              className="w-full rounded-2xl p-4 mb-4"
-              style={{
-                backgroundColor: '#2e3440',
-                border: '1px solid rgba(255,255,255,0.04)',
-              }}
-            >
-              <div
-                className="text-[11px] font-semibold tracking-[0.12em] uppercase mb-3"
-                style={{ color: '#7e8a96' }}
-              >
-                YOUR COMMITMENTS
-              </div>
-              <ul className="space-y-2">
-                {debriefData.commitments.map((c, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-sm"
-                    style={{ color: '#e2e0e6' }}
-                  >
-                    <span
-                      className="mt-1.5 w-1 h-1 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: '#82b89a' }}
-                    />
-                    {c}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Insight card */}
-          {debriefData.insight && (
-            <div
-              className="w-full rounded-2xl p-4 mb-6"
-              style={{
-                backgroundColor: '#2e3440',
-                border: '1px solid rgba(255,255,255,0.04)',
-              }}
-            >
-              <div
-                className="text-[11px] font-semibold tracking-[0.12em] uppercase mb-3"
-                style={{ color: '#7e8a96' }}
-              >
-                INSIGHT
-              </div>
-              <p className="text-sm" style={{ color: '#b0b8c4', lineHeight: 1.6 }}>
-                {debriefData.insight}
-              </p>
-            </div>
-          )}
-
-          {/* Streak row */}
-          {habits.length > 0 && (
-            <div className={`w-full grid gap-2 mb-8 ${habits.length <= 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
-              {habits.map(habit => {
-                const streak = debriefData.streaks[habit.id] ?? habit.currentStreak;
-                const isMilestoneHabit = debriefData.milestoneHabit === habit.id;
-                return (
-                  <div
-                    key={habit.id}
-                    className="rounded-xl px-3 py-3 text-center"
+                    className="flex items-center gap-3 rounded-xl px-4 py-3"
                     style={{
                       backgroundColor: '#2e3440',
-                      border: isMilestoneHabit
-                        ? '1px solid rgba(130, 184, 154, 0.5)'
-                        : '1px solid rgba(255,255,255,0.04)',
+                      border: '1px solid rgba(255,255,255,0.04)',
                     }}
                   >
                     <div
-                      className="text-lg font-semibold mb-0.5"
-                      style={{ color: isMilestoneHabit ? '#82b89a' : '#e2e0e6' }}
+                      className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-xs"
+                      style={{
+                        backgroundColor: isCovered ? 'rgba(130, 184, 154, 0.2)' : 'rgba(255,255,255,0.06)',
+                        color: isCovered ? '#82b89a' : '#7e8a96',
+                      }}
                     >
-                      {streak} {streak === 1 ? 'day' : 'days'}
+                      {isCovered ? '\u2713' : ''}
                     </div>
-                    <div
-                      className="text-[11px] truncate"
-                      style={{ color: '#7e8a96' }}
+                    <span
+                      className="text-sm font-medium"
+                      style={{ color: isCovered ? '#e2e0e6' : '#7e8a96' }}
                     >
                       {getHabitShortLabel(habit)}
-                    </div>
+                    </span>
+                    {isCovered && (
+                      <span className="ml-auto text-xs" style={{ color: '#82b89a' }}>Addressed</span>
+                    )}
                   </div>
                 );
               })}
@@ -1030,10 +962,11 @@ export default function CheckInPage() {
 
           {/* Bottom: camera + End session */}
           <div className="flex flex-col items-center gap-3 px-6 pb-8 pt-2">
-            <div className="flex items-center gap-4">
+            {/* Camera button + popover menu */}
+            <div className="relative flex items-center gap-4">
               {currentSpeaker !== 'agent' && (
                 <button
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => setShowPhotoMenu(!showPhotoMenu)}
                   className="flex items-center justify-center rounded-full transition-opacity hover:opacity-80"
                   style={{
                     width: 40,
@@ -1042,24 +975,57 @@ export default function CheckInPage() {
                     border: '1px solid rgba(130, 184, 154, 0.3)',
                     color: '#82b89a',
                   }}
-                  aria-label="Take photo"
+                  aria-label="Share photo"
                 >
                   <Camera className="w-[18px] h-[18px]" />
                 </button>
               )}
+              {showPhotoMenu && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setShowPhotoMenu(false)} />
+                  <div
+                    className="absolute bottom-12 left-1/2 -translate-x-1/2 z-20 rounded-xl overflow-hidden"
+                    style={{
+                      backgroundColor: '#2e3440',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+                      minWidth: 160,
+                    }}
+                  >
+                    <button
+                      onClick={() => { cameraInputRef.current?.click(); setShowPhotoMenu(false); }}
+                      className="w-full text-left px-4 py-3 text-sm hover:bg-white/5 transition-colors"
+                      style={{ color: '#e2e0e6' }}
+                    >
+                      Take photo
+                    </button>
+                    <div style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.06)' }} />
+                    <button
+                      onClick={() => { fileInputRef.current?.click(); setShowPhotoMenu(false); }}
+                      className="w-full text-left px-4 py-3 text-sm hover:bg-white/5 transition-colors"
+                      style={{ color: '#e2e0e6' }}
+                    >
+                      Upload photo
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
             {photoSent && (
-              <p
-                className="text-xs transition-opacity"
-                style={{ color: '#82b89a' }}
-              >
-                Photo sent
-              </p>
+              <p className="text-xs" style={{ color: '#82b89a' }}>Photo sent</p>
             )}
+            {/* Hidden file inputs */}
             <input
               type="file"
               accept="image/*"
               capture="environment"
+              ref={cameraInputRef}
+              style={{ display: 'none' }}
+              onChange={handlePhotoCapture}
+            />
+            <input
+              type="file"
+              accept="image/*"
               ref={fileInputRef}
               style={{ display: 'none' }}
               onChange={handlePhotoCapture}

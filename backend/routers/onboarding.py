@@ -76,10 +76,13 @@ or what gets in the way — that's for the check-ins to uncover over time.
 someone encouraging, or someone who asks questions and lets you figure it out?" Map their \
 answer: direct = coach, encouraging = friend, questions = reflective.
 
-4. AGENT NAME: "Last thing — what do you want to call me? Pick whatever feels right." \
+4. VOICE: "One more thing — would you prefer a masculine or feminine voice for our \
+check-ins?" Just note their answer.
+
+5. AGENT NAME: "And what do you want to call me? Pick whatever feels right." \
 When they give a name, REPEAT IT BACK to confirm: "Alright, [agent name] it is!"
 
-5. WRAP UP: Say your full closing message. Include a brief, warm note that this app is \
+6. WRAP UP: Say your full closing message. Include a brief, warm note that this app is \
 a great tool to help with accountability, but it's not a replacement for professional \
 support — something natural like "And just so you know, I'm a great tool to keep you \
 on track, but I always recommend working with a professional too if you need one." \
@@ -164,6 +167,11 @@ ONBOARDING_TOOL = types.Tool(
                         type="STRING",
                         description="The feedback lean: coach (direct), friend (encouraging), or reflective (questions)",
                         enum=["coach", "friend", "reflective"],
+                    ),
+                    "voicePreference": types.Schema(
+                        type="STRING",
+                        description="masculine or feminine voice preference",
+                        enum=["masculine", "feminine"],
                     ),
                     "habit1_category": types.Schema(
                         type="STRING",
@@ -258,7 +266,7 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                     start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
                     end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                     prefix_padding_ms=20,
-                    silence_duration_ms=700,
+                    silence_duration_ms=400,
                 )
             ),
         )
@@ -343,10 +351,9 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                                         transcript.append({"role": "tool_call", "tool": fc.name, "args": args, "timestamp": datetime.now(timezone.utc).isoformat()})
 
                                         # Save directly to Firestore (no review form)
-                                        # Map persona to a voice — coach gets masculine, friend/reflective get feminine
-                                        persona_voice_map = {"coach": "Orus", "friend": "Aoede", "reflective": "Leda"}
-                                        detected_persona = args.get("persona", "friend")
-                                        default_voice = persona_voice_map.get(detected_persona, "Aoede")
+                                        voice_pref = args.get("voicePreference", "feminine")
+                                        voice_map = {"masculine": "Orus", "feminine": "Aoede"}
+                                        default_voice = voice_map.get(voice_pref, "Aoede")
                                         print(f"[ONBOARD] Saving onboarding: {args.get('agentName')}, persona={detected_persona}, voice={default_voice}, habits={len(habits)}")
                                         await complete_onboarding(user_id, {
                                             "agentName": args.get("agentName", ""),
