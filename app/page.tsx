@@ -275,6 +275,22 @@ export default function Home() {
     );
   }
 
+  // --- If not onboarded, show loading while redirect happens ---
+  if (!profile?.onboardingComplete) {
+    router.push('/onboarding');
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: 'linear-gradient(180deg, #1e2128 0%, #262b34 100%)' }}
+      >
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 rounded-full animate-pulse" style={{ backgroundColor: 'rgba(130, 184, 154, 0.2)' }} />
+          <p className="text-sm" style={{ color: '#7e8a96' }}>Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   // --- Authenticated: Conversation-first home ---
   const persona = profile?.persona || 'friend';
   const displayName = profile?.displayName?.split(' ')[0] || user.displayName?.split(' ')[0] || 'there';

@@ -170,8 +170,7 @@ ONBOARDING_TOOL = types.Tool(
                     ),
                     "voicePreference": types.Schema(
                         type="STRING",
-                        description="masculine or feminine voice preference",
-                        enum=["masculine", "feminine"],
+                        description="The user's voice preference: masculine or feminine",
                     ),
                     "habit1_category": types.Schema(
                         type="STRING",
