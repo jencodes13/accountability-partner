@@ -695,24 +695,34 @@ export default function OnboardingPage() {
 
           case 'error':
             console.error('Onboarding error:', msg.message);
-            // If onboarding was already saved, go home. Otherwise show conversation done.
-            cleanup();
-            setIsConnected(false);
-            setConversationDone(true);
+            // DON'T cleanup here — let audio finish playing
             break;
         }
       };
 
-      ws.onclose = () => {
-        // Only mark done if onboarding was actually saved (tool call happened)
-        // Otherwise just stay on the listening phase — user can tap End
+      // Soft close: wait for audio buffer to drain before showing Next
+      const softClose = () => {
+        const ctx = playbackContextRef.current;
+        if (ctx && nextPlayTimeRef.current > ctx.currentTime) {
+          // Audio still queued — wait for it to finish
+          const remainingMs = (nextPlayTimeRef.current - ctx.currentTime) * 1000 + 800;
+          setTimeout(() => {
+            setConversationDone(true);
+            setCurrentSpeaker(null);
+          }, remainingMs);
+        } else {
+          // No audio queued — show Next after a brief pause
+          setTimeout(() => {
+            setConversationDone(true);
+            setCurrentSpeaker(null);
+          }, 500);
+        }
       };
 
+      ws.onclose = () => softClose();
       ws.onerror = (e) => {
         console.error('WebSocket error:', e);
-        setIsConnected(false);
-        setIsConnecting(false);
-        setPhase('review');
+        softClose();
       };
     } catch (error) {
       console.error('Error starting onboarding voice:', error);

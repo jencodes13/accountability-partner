@@ -8,8 +8,8 @@ Flow:
 3. Server builds dynamic system prompt with all user data
 4. Audio streams bidirectionally: client <-> server <-> Gemini Live
 5. All transcripts (user + agent) collected for review/tuning
-6. Agent can call tools mid-conversation (save summary, update streaks)
-7. On disconnect, full transcript is persisted to the session doc
+6. On disconnect, structured data extracted from transcript via regular Gemini call
+7. Full transcript is persisted to the session doc
 """
 
 import asyncio
@@ -30,7 +30,6 @@ from services.firestore_service import (
     get_recent_photos,
     get_checkin_sessions,
     save_checkin_session,
-    save_session_transcript,
     update_streak,
 )
 
@@ -47,51 +46,28 @@ PERSONA_VOICES = {
     "reflective": "Puck",  # Calm/thoughtful
 }
 
-# ─── Tool definitions for check-in sessions ───
 
-SESSION_TOOLS = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="save_checkin_summary",
-            description=(
-                "Save the check-in session summary. ONLY call this after a full conversation "
-                "with the user — NEVER on the first turn. You must have discussed at least "
-                "one habit, done the closing ritual (identity anchor + micro-commitment), "
-                "and finished speaking your closing message before calling this tool."
-            ),
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "summary": types.Schema(
-                        type="STRING",
-                        description="A 2-3 sentence natural summary of the check-in session",
-                    ),
-                    "habits_covered": types.Schema(
-                        type="STRING",
-                        description="Comma-separated habit IDs that were discussed",
-                    ),
-                    "micro_commitment": types.Schema(
-                        type="STRING",
-                        description="The specific micro-commitment the user made",
-                    ),
-                    "patterns_flagged": types.Schema(
-                        type="STRING",
-                        description="Comma-separated pattern observations (empty if none)",
-                    ),
-                    "streak_updates": types.Schema(
-                        type="STRING",
-                        description=(
-                            "JSON string of habit streak updates. Format: "
-                            '{\"habitId1\": \"maintained\", \"habitId2\": \"broken\"} '
-                            "Values: maintained (continued), broken (reset), unknown (no change)"
-                        ),
-                    ),
-                },
-                required=["summary", "micro_commitment"],
-            ),
-        ),
-    ]
-)
+# ─── Extraction prompt for post-session structured data extraction ───
+
+SESSION_EXTRACTION_PROMPT_TEMPLATE = """Extract the following from this check-in conversation transcript. The user's active habits are listed below — use their exact habit IDs when referencing which habits were discussed.
+
+Active habits:
+{habits_info}
+
+Return ONLY valid JSON, nothing else.
+
+{{
+  "summary": "A 2-3 sentence natural summary of the check-in session",
+  "habits_covered": ["list of habit IDs that were actually discussed"],
+  "micro_commitment": "the specific micro-commitment the user made, or empty string if none",
+  "patterns_flagged": ["list of pattern observations, empty array if none"],
+  "streak_updates": {{"habitId": "maintained or broken or unknown"}}
+}}
+
+For streak_updates: "maintained" means the user reported keeping up the habit, "broken" means they reported missing it or slipping, "unknown" if the status wasn't clear.
+
+Transcript:
+{transcript_text}"""
 
 
 @router.websocket("/{user_id}")
@@ -100,7 +76,6 @@ async def voice_session(ws: WebSocket, user_id: str):
 
     # Collect full transcript for persistence
     transcript: list[dict] = []
-    saved_session_id: str | None = None
 
     try:
         # 1. Load user context
@@ -146,7 +121,6 @@ async def voice_session(ws: WebSocket, user_id: str):
                 )
             ),
             system_instruction=system_prompt,
-            tools=[SESSION_TOOLS],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
@@ -270,8 +244,7 @@ async def voice_session(ws: WebSocket, user_id: str):
                     logger.error("Client->Gemini forward error: %s", e)
 
             async def forward_gemini_to_client():
-                """Receive audio/tool calls from Gemini, forward to browser."""
-                nonlocal saved_session_id
+                """Receive audio from Gemini, forward to browser."""
                 gemini_msg_count = 0
                 try:
                     while True:
@@ -286,42 +259,6 @@ async def voice_session(ws: WebSocket, user_id: str):
 
                             if tc:
                                 await ws.send_json({"type": "turn_complete"})
-
-                            tool_call = getattr(message, "tool_call", None)
-                            if tool_call and tool_call.function_calls:
-                                for fc in tool_call.function_calls:
-                                    await ws.send_json({"type": "tool_activity", "tool": fc.name})
-                                    if fc.name == "save_checkin_summary":
-                                        args = fc.args or {}
-                                        transcript.append({"role": "tool_call", "tool": fc.name, "args": args, "timestamp": datetime.now(timezone.utc).isoformat()})
-                                        habits_str = args.get("habits_covered", "")
-                                        habits_covered = [h.strip() for h in habits_str.split(",") if h.strip()]
-                                        patterns_str = args.get("patterns_flagged", "")
-                                        patterns_flagged = [p.strip() for p in patterns_str.split(",") if p.strip()]
-                                        streak_updates = {}
-                                        streak_str = args.get("streak_updates", "{}")
-                                        try:
-                                            streak_updates = json.loads(streak_str) if streak_str else {}
-                                        except json.JSONDecodeError:
-                                            pass
-                                        saved_session_id = save_checkin_session(user_id, {
-                                            "summary": args.get("summary", ""),
-                                            "habitsCovered": habits_covered,
-                                            "microCommitment": args.get("micro_commitment", ""),
-                                            "patternsFlagged": patterns_flagged,
-                                            "streakUpdates": streak_updates,
-                                        })
-                                        for habit_id, outcome in streak_updates.items():
-                                            update_streak(user_id, habit_id, outcome)
-                                        # Don't send tool response — causes 1008 on this model
-                                        await ws.send_json({
-                                            "type": "session_summary", "sessionId": saved_session_id,
-                                            "habitsCovered": habits_covered,
-                                            "habitsSkipped": [h["id"] for h in habits if h.get("id") not in habits_covered],
-                                            "commitments": [args.get("micro_commitment", "")],
-                                            "insight": args.get("summary", ""), "streaks": streak_updates,
-                                        })
-                                continue
 
                             if not sc:
                                 continue
@@ -383,21 +320,89 @@ async def voice_session(ws: WebSocket, user_id: str):
         except Exception:
             pass
     finally:
-        # Persist transcript to the session document
+        # Extract structured data from transcript and persist
         if transcript:
             try:
-                if saved_session_id:
-                    # Tool call already created the session doc — append transcript
-                    save_session_transcript(user_id, saved_session_id, transcript)
-                else:
-                    # No tool call happened (e.g. early disconnect) — save as standalone
+                extraction_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+                transcript_text = "\n".join([
+                    f"{t['role']}: {t['text']}"
+                    for t in transcript
+                    if t.get('text') and t['role'] in ('user', 'agent')
+                ])
+
+                # Build habits info for the extraction prompt
+                habits_info = "\n".join([
+                    f"- ID: {h.get('id', '')}, Category: {h.get('category', '')}, Goal: {h.get('label', '')}"
+                    for h in habits
+                ])
+
+                extraction_prompt = SESSION_EXTRACTION_PROMPT_TEMPLATE.format(
+                    habits_info=habits_info,
+                    transcript_text=transcript_text,
+                )
+
+                print(f"[SESSION] Extracting structured data from transcript ({len(transcript)} entries)...")
+                extraction_response = extraction_client.models.generate_content(
+                    model="gemini-2.5-flash-preview-05-20",
+                    contents=extraction_prompt,
+                )
+
+                # Clean the response — strip markdown code fences if present
+                response_text = extraction_response.text.strip()
+                if response_text.startswith('```'):
+                    response_text = response_text.split('\n', 1)[1]
+                    response_text = response_text.rsplit('```', 1)[0]
+
+                extracted = json.loads(response_text)
+
+                habits_covered = extracted.get("habits_covered", [])
+                patterns_flagged = extracted.get("patterns_flagged", [])
+                streak_updates = extracted.get("streak_updates", {})
+
+                saved_session_id = save_checkin_session(user_id, {
+                    "summary": extracted.get("summary", ""),
+                    "habitsCovered": habits_covered,
+                    "microCommitment": extracted.get("micro_commitment", ""),
+                    "patternsFlagged": patterns_flagged,
+                    "streakUpdates": streak_updates,
+                    "transcript": transcript,
+                })
+
+                for habit_id, outcome in streak_updates.items():
+                    update_streak(user_id, habit_id, outcome)
+
+                print(f"[SESSION] Saved from transcript: {len(habits_covered)} habits, session={saved_session_id}")
+
+                # Notify frontend with session summary
+                try:
+                    await ws.send_json({
+                        "type": "session_summary",
+                        "sessionId": saved_session_id,
+                        "habitsCovered": habits_covered,
+                        "habitsSkipped": [h["id"] for h in habits if h.get("id") not in habits_covered],
+                        "commitments": [extracted.get("micro_commitment", "")],
+                        "insight": extracted.get("summary", ""),
+                        "streaks": streak_updates,
+                    })
+                except Exception:
+                    pass  # WebSocket might already be closed
+
+            except Exception as e:
+                print(f"[SESSION] !! Transcript extraction failed: {e}")
+                import traceback
+                traceback.print_exc()
+                # Fall back: save transcript without structured data
+                try:
                     save_checkin_session(user_id, {
                         "summary": "Session ended before summary was generated",
                         "transcript": transcript,
                     })
-                logger.info("Saved check-in transcript for user %s (%d entries)", user_id, len(transcript))
-            except Exception as e:
-                logger.error("Failed to save check-in transcript for %s: %s", user_id, e)
+                except Exception as e2:
+                    logger.error("Failed to save fallback check-in transcript for %s: %s", user_id, e2)
+
+            logger.info("Saved check-in transcript for user %s (%d entries)", user_id, len(transcript))
+
         try:
             await ws.close()
         except Exception:

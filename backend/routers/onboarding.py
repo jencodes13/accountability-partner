@@ -4,11 +4,10 @@ Onboarding API — voice onboarding via Gemini Live + REST save endpoint.
 WebSocket flow:
 1. Client connects with userId
 2. Gemini Live guides the user through onboarding via voice
-3. All transcripts (user + agent) are collected for later review
-4. When the agent has gathered all info, it calls save_onboarding_results tool
-5. Server sends onboarding_complete message to client with structured data
-6. On disconnect, full transcript is saved to Firestore
-7. Client shows review form → user edits → POST saves to Firestore
+3. All transcripts (user + agent) are collected
+4. When the session ends, a separate Gemini call extracts structured data from transcript
+5. Server saves extracted data to Firestore and sends onboarding_complete to client
+6. Client shows review form → user edits → POST saves to Firestore
 """
 
 import asyncio
@@ -44,9 +43,7 @@ spending, screen time, sleep, journaling, betting, or alcohol consumption. What 
 with you?"
 
 PACING: You must ask one question at a time and WAIT for the user to respond before continuing. \
-Do NOT gather multiple pieces of information from a single response and assume you have everything. \
-Do NOT call the save tool until you have completed the ENTIRE conversation arc below AND finished \
-speaking your wrap-up message. The tool call must be the very last thing you do.
+Do NOT gather multiple pieces of information from a single response and assume you have everything.
 
 CONVERSATION ARC — follow this order:
 
@@ -87,10 +84,8 @@ a great tool to help with accountability, but it's not a replacement for profess
 support — something natural like "And just so you know, I'm a great tool to keep you \
 on track, but I always recommend working with a professional too if you need one." \
 Then close warmly: "I'm excited to help you, [user name]. I'll see you at your first \
-check-in!" Keep the whole wrap-up to 2-3 sentences. \
-THEN, only AFTER you have completely finished speaking your closing, call the \
-save_onboarding_results tool. Do NOT call the tool while still speaking. \
-The tool call must be the absolute last thing you do.
+check-in!" Keep the whole wrap-up to 2-3 sentences. Say your closing message naturally \
+and end the conversation — the system will handle saving everything automatically.
 
 RESPONSE QUALITY:
 - NEVER respond with generic filler like "That's great" or "Awesome, thanks for sharing." \
@@ -121,7 +116,7 @@ interruption first, then pick back up naturally.
 - NAME CORRECTIONS ARE TOP PRIORITY: If the user says anything like "actually my name \
 is...", "it's pronounced...", "no, it's...", or corrects their name in ANY way, \
 immediately acknowledge it: "Oh sorry about that, [corrected name]!" and use the \
-corrected name for the rest of the conversation and in the save tool. Getting someone's \
+corrected name for the rest of the conversation. Getting someone's \
 name right matters more than any question in the arc.
 - If asked to repeat, repeat clearly without over-explaining.
 - If asked about the app: "This app helps you build habits with daily voice check-ins. \
@@ -145,90 +140,22 @@ names include Jenny, Jennie, Jennifer, Mike, Michael, Chris, Christine, Sarah, S
 Sam, etc. Pay close attention to spelling variations.
 """
 
-# ─── Tool definition for structured data extraction ───
 
-ONBOARDING_TOOL = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="save_onboarding_results",
-            description=(
-                "Call this ONLY after you have finished speaking your complete closing "
-                "message. The tool call must be the very last action — never call it "
-                "while you are still talking."
-            ),
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "agentName": types.Schema(
-                        type="STRING",
-                        description="The name the user chose for their accountability partner",
-                    ),
-                    "persona": types.Schema(
-                        type="STRING",
-                        description="The feedback lean: coach or friend or reflective",
-                    ),
-                    "voicePreference": types.Schema(
-                        type="STRING",
-                        description="The user's voice preference: masculine or feminine",
-                    ),
-                    "habit1_category": types.Schema(
-                        type="STRING",
-                        description="Category for habit 1. Must be one of: alcohol, sports-betting, nutrition, exercise, spending, journaling, screen-time, sleep, workouts-steps",
-                    ),
-                    "habit1_label": types.Schema(
-                        type="STRING",
-                        description="Short goal description for habit 1",
-                    ),
-                    "habit1_identity": types.Schema(
-                        type="STRING",
-                        description="Identity statement for habit 1 (optional, empty string if not discussed)",
-                    ),
-                    "habit2_category": types.Schema(
-                        type="STRING",
-                        description="Category for habit 2 (empty string if no second habit)",
-                    ),
-                    "habit2_label": types.Schema(
-                        type="STRING",
-                        description="Short goal description for habit 2",
-                    ),
-                    "habit2_identity": types.Schema(
-                        type="STRING",
-                        description="Identity statement for habit 2 (optional)",
-                    ),
-                    "habit3_category": types.Schema(
-                        type="STRING",
-                        description="Category for habit 3 (empty string if no third habit)",
-                    ),
-                    "habit3_label": types.Schema(
-                        type="STRING",
-                        description="Short goal description for habit 3",
-                    ),
-                    "habit3_identity": types.Schema(
-                        type="STRING",
-                        description="Identity statement for habit 3 (optional)",
-                    ),
-                },
-                required=["agentName", "persona", "habit1_category", "habit1_label"],
-            ),
-        )
-    ]
-)
+# ─── Extraction prompt for post-session structured data extraction ───
 
+EXTRACTION_PROMPT_TEMPLATE = """Extract the following from this onboarding conversation transcript. Return ONLY valid JSON, nothing else.
 
-def _parse_habits_from_tool_args(args: dict) -> list[dict]:
-    """Extract habit list from flat tool call arguments."""
-    habits = []
-    for i in range(1, 4):
-        cat = args.get(f"habit{i}_category", "")
-        label = args.get(f"habit{i}_label", "")
-        identity = args.get(f"habit{i}_identity", "")
-        if cat and label:
-            habits.append({
-                "category": cat,
-                "label": label,
-                "identityStatement": identity,
-            })
-    return habits
+{{
+  "agentName": "the name the user chose for their partner",
+  "persona": "coach or friend or reflective based on their style preference",
+  "voicePreference": "masculine or feminine",
+  "habits": [
+    {{"category": "one of: alcohol, sports-betting, nutrition, exercise, spending, journaling, screen-time, sleep, workouts-steps", "label": "short goal description"}}
+  ]
+}}
+
+Transcript:
+{transcript_text}"""
 
 
 # ─── WebSocket endpoint — voice onboarding ───
@@ -251,7 +178,6 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                 )
             ),
             system_instruction=ONBOARDING_PROMPT,
-            tools=[ONBOARDING_TOOL],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
@@ -319,7 +245,7 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                     logger.error("Client->Gemini forward error: %s", e)
 
             async def forward_gemini_to_client():
-                """Receive audio/tool calls from Gemini, forward to browser."""
+                """Receive audio from Gemini, forward to browser."""
                 gemini_msg_count = 0
                 try:
                     while True:
@@ -335,33 +261,6 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                             # Forward turn_complete to frontend
                             if tc:
                                 await ws.send_json({"type": "turn_complete"})
-
-                            tool_call = getattr(message, "tool_call", None)
-                            if tool_call and tool_call.function_calls:
-                                for fc in tool_call.function_calls:
-                                    if fc.name == "save_onboarding_results":
-                                        args = fc.args or {}
-                                        habits = _parse_habits_from_tool_args(args)
-                                        transcript.append({"role": "tool_call", "tool": fc.name, "args": args, "timestamp": datetime.now(timezone.utc).isoformat()})
-
-                                        # Save directly to Firestore (no review form)
-                                        voice_pref = args.get("voicePreference", "feminine")
-                                        voice_map = {"masculine": "Orus", "feminine": "Aoede"}
-                                        default_voice = voice_map.get(voice_pref, "Aoede")
-                                        print(f"[ONBOARD] Saving onboarding: {args.get('agentName')}, persona={detected_persona}, voice={default_voice}, habits={len(habits)}")
-                                        await complete_onboarding(user_id, {
-                                            "agentName": args.get("agentName", ""),
-                                            "persona": args.get("persona", "friend"),
-                                            "voiceName": default_voice,
-                                            "language": "en",
-                                            "dailyCheckInTime": "20:00",
-                                            "habits": habits,
-                                        })
-
-                                        await ws.send_json({"type": "onboarding_complete"})
-                                        # Don't send tool response — it causes 1008 on this model
-                                        # The save is already done, session can end
-                                continue
 
                             if not sc:
                                 continue
@@ -427,6 +326,67 @@ async def voice_onboarding(ws: WebSocket, user_id: str):
                 logger.info("Saved onboarding transcript for user %s (%d entries)", user_id, len(transcript))
             except Exception as e:
                 logger.error("Failed to save onboarding transcript for %s: %s", user_id, e)
+
+            # Extract structured data from transcript using regular (non-live) Gemini
+            try:
+                extraction_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+                transcript_text = "\n".join([
+                    f"{t['role']}: {t['text']}"
+                    for t in transcript
+                    if t.get('text') and t['role'] in ('user', 'agent')
+                ])
+
+                extraction_prompt = EXTRACTION_PROMPT_TEMPLATE.format(transcript_text=transcript_text)
+
+                print(f"[ONBOARD] Extracting structured data from transcript ({len(transcript)} entries)...")
+                extraction_response = extraction_client.models.generate_content(
+                    model="gemini-2.5-flash-preview-05-20",
+                    contents=extraction_prompt,
+                )
+
+                # Clean the response — strip markdown code fences if present
+                response_text = extraction_response.text.strip()
+                if response_text.startswith('```'):
+                    response_text = response_text.split('\n', 1)[1]
+                    response_text = response_text.rsplit('```', 1)[0]
+
+                extracted = json.loads(response_text)
+
+                voice_pref = extracted.get("voicePreference", "feminine")
+                voice_map = {"masculine": "Orus", "feminine": "Aoede"}
+                default_voice = voice_map.get(voice_pref, "Aoede")
+
+                habits_data = []
+                for h in extracted.get("habits", []):
+                    habits_data.append({
+                        "category": h.get("category", "exercise"),
+                        "label": h.get("label", ""),
+                        "identityStatement": "",
+                    })
+
+                await complete_onboarding(user_id, {
+                    "agentName": extracted.get("agentName", "Partner"),
+                    "persona": extracted.get("persona", "friend"),
+                    "voiceName": default_voice,
+                    "language": "en",
+                    "dailyCheckInTime": "20:00",
+                    "habits": habits_data,
+                })
+
+                print(f"[ONBOARD] Saved from transcript: {extracted.get('agentName')}, {len(habits_data)} habits")
+
+                # Notify frontend
+                try:
+                    await ws.send_json({"type": "onboarding_complete"})
+                except Exception:
+                    pass  # WebSocket might already be closed
+
+            except Exception as e:
+                print(f"[ONBOARD] !! Transcript extraction failed: {e}")
+                import traceback
+                traceback.print_exc()
+
         try:
             await ws.close()
         except Exception:
